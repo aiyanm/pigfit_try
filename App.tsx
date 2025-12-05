@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, ActivityIndicator } from 'react-native';
-import useBLE from './usBLE';
+import useBLE from './useBLE';
 import { useEffect, useState } from 'react';
 
 // --- 2A. STATUS CARD COMPONENT ---
@@ -54,8 +54,8 @@ const LivestockItem = ({ id, temp, hr, feed, status }: LivestockItemProps) => {
           <Text style={styles.dataValue}>{hr} bpm</Text>
         </View>
         <View style={styles.dataColumn}>
-          <Text style={styles.dataLabel}>Feed</Text>
-          <Text style={styles.dataValue}>{feed.toFixed(1)} kg</Text>
+          <Text style={styles.dataLabel}>Activity</Text>
+          <Text style={styles.dataValue}>{status} </Text>
         </View>
       </View>
     </View>
@@ -134,6 +134,7 @@ export default function App() {
           color="#28a745" 
           bgColor="#e5f3e5" 
         />
+        {/* REMOVE THIS SHIT */}
         <StatusCard 
           label="Activity" 
           value={currentStatus} 
