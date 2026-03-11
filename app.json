@@ -47,7 +47,8 @@
           ],
           "bluetoothAlwaysPermission": "Allow $[APP_NAME] to connect to Bluetooth"
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "extra": {
       "eas": {

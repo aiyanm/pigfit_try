@@ -9,15 +9,30 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo/metro-config": "~54.0.2",
+    "@react-navigation/bottom-tabs": "^7.8.11",
+    "@react-navigation/native": "^7.1.24",
     "eas-cli": "^16.28.0",
     "expo": "~54.0.25",
+    "expo-asset": "~12.0.11",
     "expo-dev-client": "~6.0.18",
     "expo-device": "~8.0.9",
+    "expo-file-system": "~19.0.20",
+    "expo-notifications": "^55.0.11",
+    "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.8",
+    "nativewind": "^2.0.11",
+    "prettier-plugin-tailwindcss": "^0.5.14",
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-base64": "^0.2.2",
-    "react-native-ble-plx": "^3.5.0"
+    "react-native-ble-plx": "^3.5.0",
+    "react-native-gifted-charts": "^1.4.70",
+    "react-native-linear-gradient": "^2.8.3",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "^15.15.1",
+    "tailwindcss": "3.3.2"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",

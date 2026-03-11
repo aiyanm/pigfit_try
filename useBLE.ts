@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 import {
   BleError,
@@ -9,6 +9,11 @@ import {
 
 import * as ExpoDevice from "expo-device";
 import base64 from "react-native-base64";
+import { initializeLogger, logSensorData } from "./services/dataLogger";
+import {
+  notifyBLEConnected,
+  notifyBLEDisconnected,
+} from "./services/notificationService";
 
 const PIGFIT_DEVICE_NAME = "PigFit_Device";
 const PIGFIT_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -18,9 +23,8 @@ interface PigFitData {
   temp: number;
   envTemp: number;
   humidity: number;
-  accelX: number;
-  accelY: number;
-  accelZ: number;
+  activityIntensity: number; // Processed on Arduino
+  pitchAngle: number;       // Processed on Arduino
   hr: number;
   feed: number;
 }
@@ -40,6 +44,18 @@ function useBLE(): BluetoothLowEnergyApi {
   const [allDevices, setAllDevices] = useState<Device[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [receivedData, setReceivedData] = useState<PigFitData | null>(null);
+
+  // Initialize the data logger when component mounts
+  useEffect(() => {
+    const initLogger = async () => {
+      await initializeLogger();
+    };
+    initLogger().catch(error => {
+      console.error('Failed to initialize logger:', error);
+    });
+  }, []);
+
+
 
   const requestAndroid31Permissions = async () => {
     const bluetoothScanPermission = await PermissionsAndroid.request(
@@ -179,18 +195,49 @@ function useBLE(): BluetoothLowEnergyApi {
       }
       
       bleManager.stopDeviceScan();
+
+      // Send BLE connected notification
+      await notifyBLEConnected(device.name || "PigFit Device");
+
+      // Monitor for unexpected disconnection
+      setupDisconnectionListener(device, bleManager);
+
       startStreamingData(deviceConnection);
     } catch (e) {
       console.log("FAILED TO CONNECT", e);
     }
   };
 
-  const disconnectFromDevice = () => {
+  const disconnectFromDevice = async () => {
     if (connectedDevice) {
+      const deviceName = connectedDevice.name || "PigFit Device";
       bleManager.cancelDeviceConnection(connectedDevice.id);
       setConnectedDevice(null);
       setReceivedData(null);
+
+      // Send BLE disconnected notification
+      await notifyBLEDisconnected(deviceName);
     }
+  };
+
+  const setupDisconnectionListener = (device: Device, manager: BleManager) => {
+    // Monitor for unexpected device disconnection
+    const subscription = manager.onDeviceDisconnected(
+      device.id,
+      async (error) => {
+        console.log(`⚠️ Device ${device.name} disconnected:`, error);
+        setConnectedDevice(null);
+        setReceivedData(null);
+
+        // Notify user of unexpected disconnection
+        await notifyBLEDisconnected(
+          device.name || "PigFit Device"
+        );
+
+        // Clean up subscription
+        subscription.remove();
+      }
+    );
   };
 
   const onDataUpdate = (
@@ -247,15 +294,20 @@ function useBLE(): BluetoothLowEnergyApi {
         temp: view.getFloat32(2, true),
         envTemp: view.getFloat32(6, true),
         humidity: view.getFloat32(10, true),
-        accelX: view.getFloat32(14, true),
-        accelY: view.getFloat32(18, true),
-        accelZ: view.getFloat32(22, true),
-        hr: packet[26],
-        feed: view.getUint16(27, true) + (packet[29] / 100),
+        activityIntensity: view.getFloat32(14, true), // Updated for Stage 1
+        pitchAngle: view.getFloat32(18, true),        // Updated for Stage 1
+        hr: packet[22], // Note: Byte indices might need re-alignment based on Arduino sketch changes
+        feed: view.getUint16(23, true) + (packet[25] / 100),
       };
 
       console.log("✅ Binary data parsed:", parsedData);
       setReceivedData(parsedData);
+      
+      // Log data to file
+      logSensorData({
+        timestamp: Date.now(),
+        ...parsedData,
+      });
     } catch (e) {
       console.log("❌ Error parsing binary data:", e);
     }
