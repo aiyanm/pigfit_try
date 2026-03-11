@@ -96,12 +96,6 @@ const Analyze = () => {
     dataPointText: point.temp.toFixed(1),
   }));
 
-  // Transform sensor data for heart rate chart
-  const heartRateData = sensorData.map(point => ({
-    value: point.hr,
-    dataPointText: point.hr.toString(),
-  }));
-
   // Transform sensor data for activity chart
   const activityData = sensorData.map(point => {
     const activity = point.activityIntensity * 10; // Scale for better visualization
@@ -245,42 +239,6 @@ const Analyze = () => {
           <View className="flex-row justify-end mt-2">
             {/* <Text className="text-xs text-red-500">Fever threshold</Text> */}
           </View>
-        </View>
-
-        {/* Heart Rate Chart */}
-        <View className="bg-white mx-4 mt-3 rounded-xl p-4 border border-gray-200">
-          <Text className="text-sm font-semibold text-gray-900 mb-1">Heart Rate (bpm)</Text>
-          <Text className="text-xs text-gray-500 mb-4">
-            {sensorData.length > 0 ? sensorData[sensorData.length - 1].hr.toString() : '--'}
-          </Text>
-          {isLoading ? (
-            <View className="h-[100px] items-center justify-center">
-              <ActivityIndicator size="small" color="#4CAF50" />
-            </View>
-          ) : heartRateData.length > 0 ? (
-            <LineChart
-              data={heartRateData}
-              width={width - 80}
-              height={100}
-              spacing={heartRateData.length > 10 ? (width - 100) / heartRateData.length : 45}
-              color="#4CAF50"
-              thickness={2.5}
-              initialSpacing={10}
-              noOfSections={3}
-              yAxisColor="transparent"
-              xAxisColor="#E5E7EB"
-              yAxisTextStyle={axisTextStyle}
-              hideDataPoints={true}
-              curved
-              hideRules={false}
-              rulesColor="#F3F4F6"
-              rulesType="solid"
-            />
-          ) : (
-            <View className="h-[100px] items-center justify-center">
-              <Text className="text-xs text-gray-500">No data available</Text>
-            </View>
-          )}
         </View>
 
         {/* Activity Index Chart */}

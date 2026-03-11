@@ -21,13 +21,12 @@ const StatusCard = ({ label, value, color, bgColor }: StatusCardProps) => (
 interface LivestockItemProps {
   id: string;
   temp: number;
-  hr: number;
   feed: number;
   status: string;
   onNavigateToAnalyze?: () => void;
 }
 
-const LivestockItem = ({ id, temp, hr, feed, status, onNavigateToAnalyze }: LivestockItemProps) => {
+const LivestockItem = ({ id, temp, feed, status, onNavigateToAnalyze }: LivestockItemProps) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [weight, setWeight] = useState('');
   const [isEditingWeight, setIsEditingWeight] = useState(false);
@@ -73,19 +72,19 @@ const LivestockItem = ({ id, temp, hr, feed, status, onNavigateToAnalyze }: Live
           </View> */}
         </View>
 
-        {/* Sensor Data (Temperature, Heart Rate, Activity) */}
+        {/* Sensor Data (Temperature, Activity) */}
         <View className="flex-row justify-between">
           <View className="flex-1">
             <Text className="text-xs text-gray-500">Temp</Text>
             <Text className="text-base font-semibold mt-1" style={{ color: tempColor }}>{temp.toFixed(1)}°C</Text>
           </View>
           <View className="flex-1">
-            <Text className="text-xs text-gray-500">Heart Rate</Text>
-            <Text className="text-base font-semibold text-gray-800 mt-1">{hr} bpm</Text>
-          </View>
-          <View className="flex-1">
             <Text className="text-xs text-gray-500">Activity</Text>
             <Text className="text-base font-semibold mt-1" style={{ color: statusColor }}>{status}</Text>
+          </View>
+          <View className="flex-1">
+            <Text className="text-xs text-gray-500">Feed</Text>
+            <Text className="text-base font-semibold text-gray-800 mt-1">{feed.toFixed(2)} kg</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -295,7 +294,6 @@ export default function DashboardScreen({ navigation }: any) {
           <LivestockItem 
             id="LIVE-PIG-01"
             temp={receivedData.temp}
-            hr={receivedData.hr}
             feed={receivedData.feed}
             status={currentStatus}
             onNavigateToAnalyze={() => navigation.navigate('Analyze')}

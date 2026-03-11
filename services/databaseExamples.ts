@@ -24,7 +24,6 @@ export const getAllSensorDataExample = async () => {
       humidity: `${record.humidity}%`,
       // Pig data
       pigTemp: `${record.temp}°C`,
-      heartRate: `${record.hr} bpm`,
       activityIntensity: record.activity_intensity.toFixed(2),
       pitchAngle: `${record.pitch_angle.toFixed(1)}°`,
       feed: `${record.feed} kg`,
@@ -75,7 +74,6 @@ export const getPigFieldsExample = async () => {
     console.log({
       timestamp: new Date(record.timestamp).toLocaleString(),
       temperature: `${record.temp}°C`,
-      heartRate: `${record.hr} bpm`,
       activityIntensity: record.activity_intensity.toFixed(2),
       pitchAngle: `${record.pitch_angle.toFixed(1)}°`,
       feed: `${record.feed} kg`,
@@ -85,9 +83,8 @@ export const getPigFieldsExample = async () => {
   return sensorData.map((r: any) => ({
     timestamp: r.timestamp,
     temp: r.temp,
-    hr: r.hr,
     activity_intensity: r.activity_intensity,
-    pitch_angleangle: r.pitch_angle,
+    pitch_angle: r.pitch_angle,
     feed: r.feed,
   }));
 };
@@ -164,11 +161,11 @@ export const exportAllDataAsCSV = async () => {
   const sensorData = await dbService.getSensorData(oneDayAgo, now);
   
   // CSV Header (all fields)
-  let csv = 'Timestamp,Device ID,Pig ID,Pig Temp (°C),Heart Rate (bpm),Activity,Pitch (°),Feed (kg),Env Temp (°C),Humidity (%)\\n';
+  let csv = 'Timestamp,Device ID,Pig ID,Pig Temp (°C),Activity,Pitch (°),Feed (kg),Env Temp (°C),Humidity (%)\n';
   
   // CSV Data
   sensorData.forEach((record: any) => {
-    csv += `${new Date(record.timestamp).toISOString()},${record.device_id},${record.pig_id},${record.temp},${record.hr},${record.activity_intensity},${record.pitch_angle},${record.feed},${record.env_temp},${record.humidity}\\n`;
+    csv += `${new Date(record.timestamp).toISOString()},${record.device_id},${record.pig_id},${record.temp},${record.activity_intensity},${record.pitch_angle},${record.feed},${record.env_temp},${record.humidity}\n`;
   });
   
   console.log('📄 Complete Sensor Data CSV:');
@@ -210,11 +207,11 @@ export const exportPigDataAsCSV = async () => {
   const sensorData = await dbService.getSensorData(oneDayAgo, now);
   
   // CSV Header (pig fields only)
-  let csv = 'Timestamp,Device ID,Pig ID,Body Temp (°C),Heart Rate (bpm),Activity Intensity,Pitch Angle (°),Feed (kg)\\n';
+  let csv = 'Timestamp,Device ID,Pig ID,Body Temp (°C),Activity Intensity,Pitch Angle (°),Feed (kg)\n';
   
   // CSV Data
   sensorData.forEach((record: any) => {
-    csv += `${new Date(record.timestamp).toISOString()},${record.device_id},${record.pig_id},${record.temp},${record.hr},${record.activity_intensity},${record.pitch_angle},${record.feed}\\n`;
+    csv += `${new Date(record.timestamp).toISOString()},${record.device_id},${record.pig_id},${record.temp},${record.activity_intensity},${record.pitch_angle},${record.feed}\n`;
   });
   
   console.log('📄 Pig Data CSV:');

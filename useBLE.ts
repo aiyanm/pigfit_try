@@ -25,7 +25,6 @@ interface PigFitData {
   humidity: number;
   activityIntensity: number; // Processed on Arduino
   pitchAngle: number;       // Processed on Arduino
-  hr: number;
   feed: number;
 }
 
@@ -296,7 +295,6 @@ function useBLE(): BluetoothLowEnergyApi {
         humidity: view.getFloat32(10, true),
         activityIntensity: view.getFloat32(14, true), // Updated for Stage 1
         pitchAngle: view.getFloat32(18, true),        // Updated for Stage 1
-        hr: packet[22], // Note: Byte indices might need re-alignment based on Arduino sketch changes
         feed: view.getUint16(23, true) + (packet[25] / 100),
       };
 

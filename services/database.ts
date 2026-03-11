@@ -6,7 +6,6 @@ interface SensorData {
   pig_id: string;
   // Pig physiological and behavioral data
   temp: number;
-  hr: number;
   activity_intensity: number;
   activity_state?: string;  // 'Resting' | 'Standing/Minor Movement' | 'High Activity/Distress'
   pitch_angle: number;
@@ -41,7 +40,6 @@ interface PeriodAggregate {
   mean_temp: number;
   mean_env_temp: number;
   mean_humidity: number;
-  mean_hr: number;
   mean_activity: number;
   mean_pitch: number;
   mean_feed: number;
@@ -153,7 +151,6 @@ class DatabaseService {
           device_id TEXT NOT NULL,
           pig_id TEXT NOT NULL,
           temp REAL NOT NULL,
-          hr INTEGER NOT NULL,
           activity_intensity REAL NOT NULL,
           pitch_angle REAL NOT NULL,
           feed REAL NOT NULL,
@@ -194,7 +191,6 @@ class DatabaseService {
           mean_temp REAL,
           mean_env_temp REAL,
           mean_humidity REAL,
-          mean_hr REAL,
           mean_activity REAL,
           mean_pitch REAL,
           mean_feed REAL,
@@ -245,16 +241,15 @@ class DatabaseService {
       await this.db.runAsync(
         `INSERT INTO period_aggregates
          (period_type, bucket_start, bucket_end, pig_id,
-          mean_temp, mean_env_temp, mean_humidity, mean_hr,
+          mean_temp, mean_env_temp, mean_humidity,
           mean_activity, mean_pitch, mean_feed,
           thi, lethargy_alert, dominant_activity_state, sample_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(period_type, bucket_start, pig_id) DO UPDATE SET
            bucket_end              = excluded.bucket_end,
            mean_temp               = excluded.mean_temp,
            mean_env_temp           = excluded.mean_env_temp,
            mean_humidity           = excluded.mean_humidity,
-           mean_hr                 = excluded.mean_hr,
            mean_activity           = excluded.mean_activity,
            mean_pitch              = excluded.mean_pitch,
            mean_feed               = excluded.mean_feed,
@@ -270,7 +265,6 @@ class DatabaseService {
           data.mean_temp,
           data.mean_env_temp,
           data.mean_humidity,
-          data.mean_hr,
           data.mean_activity,
           data.mean_pitch,
           data.mean_feed,
@@ -322,14 +316,13 @@ class DatabaseService {
 
       await this.db.runAsync(
         `INSERT INTO sensor_data 
-         (timestamp, device_id, pig_id, temp, hr, activity_intensity, activity_state, pitch_angle, feed, env_temp, humidity) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, feed, env_temp, humidity) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           data.timestamp,
           data.device_id,
           data.pig_id,
           data.temp,
-          data.hr,
           data.activity_intensity,
           data.activity_state ?? 'Resting',
           data.pitch_angle,

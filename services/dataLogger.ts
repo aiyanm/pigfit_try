@@ -8,7 +8,6 @@ export type TrendPeriod = '30m' | '1h' | '4h' | '12h';
 export interface SensorDataPoint {
   timestamp: number;
   temp: number;
-  hr: number;
   envTemp: number;
   humidity: number;
   activityIntensity: number;
@@ -56,7 +55,6 @@ export const logSensorData = async (
       device_id: deviceId,
       pig_id: pigId,
       temp: data.temp,
-      hr: data.hr,
       activity_intensity: data.activityIntensity,
       activity_state: classifyActivityState(data.activityIntensity),
       pitch_angle: data.pitchAngle,
@@ -135,7 +133,6 @@ export const loadSensorData = async (
     const dataPoints: SensorDataPoint[] = sqlData.map((record: any) => ({
       timestamp: record.timestamp,
       temp: record.temp,
-      hr: record.hr,
       envTemp: record.env_temp,
       humidity: record.humidity,
       activityIntensity: record.activity_intensity,
@@ -252,19 +249,17 @@ export const computeAndStorePeriodAggregates = async (
           temp:     acc.temp     + (p.temp               ?? 0),
           envTemp:  acc.envTemp  + (p.env_temp           ?? 0),
           humidity: acc.humidity + (p.humidity           ?? 0),
-          hr:       acc.hr       + (p.hr                 ?? 0),
           activity: acc.activity + (p.activity_intensity ?? 0),
           pitch:    acc.pitch    + (p.pitch_angle        ?? 0),
           feed:     acc.feed     + (p.feed               ?? 0),
         }),
-        { temp: 0, envTemp: 0, humidity: 0, hr: 0, activity: 0, pitch: 0, feed: 0 }
+        { temp: 0, envTemp: 0, humidity: 0, activity: 0, pitch: 0, feed: 0 }
       );
 
       const n = points.length;
       const meanTemp     = sums.temp     / n;
       const meanEnvTemp  = sums.envTemp  / n;
       const meanHumidity = sums.humidity / n;
-      const meanHR       = sums.hr       / n;
       const meanActivity = sums.activity / n;
       const meanPitch    = sums.pitch    / n;
       const meanFeed     = sums.feed     / n;
@@ -283,7 +278,6 @@ export const computeAndStorePeriodAggregates = async (
         mean_temp:               Math.round(meanTemp     * 100) / 100,
         mean_env_temp:           Math.round(meanEnvTemp  * 100) / 100,
         mean_humidity:           Math.round(meanHumidity * 100) / 100,
-        mean_hr:                 Math.round(meanHR),
         mean_activity:           Math.round(meanActivity * 100) / 100,
         mean_pitch:              Math.round(meanPitch    * 100) / 100,
         mean_feed:               Math.round(meanFeed     * 100) / 100,

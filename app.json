@@ -48,7 +48,15 @@
           "bluetoothAlwaysPermission": "Allow $[APP_NAME] to connect to Bluetooth"
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#FFFFFF",
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "extra": {
       "eas": {

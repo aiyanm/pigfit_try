@@ -23,7 +23,6 @@ export interface HealthStatistics {
   avgTemp: number;
   minTemp: number;
   maxTemp: number;
-  avgHR: number;
   avgActivity: number;
   avgTHI: number;
   avgCircadianDelta: number;
@@ -280,15 +279,6 @@ const isValidRecord = (record: any): boolean => {
     return false;
   }
 
-  // Check heart rate: 0-200 bpm (reasonable range)
-  if (
-    record.mean_hr !== null &&
-    record.mean_hr !== undefined &&
-    (isNaN(record.mean_hr) || record.mean_hr < 0 || record.mean_hr > 200)
-  ) {
-    return false;
-  }
-
   // Check activity: 0-3g (reasonable range for accelerometer)
   if (
     record.mean_activity !== null &&
@@ -339,7 +329,6 @@ const calculateStatistics = (aggregates: any[]): { stats: HealthStatistics; data
     if (!valid) {
       console.warn(`⚠️ Skipping invalid record at index ${index}:`, {
         temp: record.mean_temp,
-        hr: record.mean_hr,
         activity: record.mean_activity,
         thi: record.thi,
       });
@@ -375,9 +364,6 @@ const calculateStatistics = (aggregates: any[]): { stats: HealthStatistics; data
         acc.lethargyAlerts++;
       }
 
-      // Track HR for averaging
-      acc.hrSum += record.mean_hr || 0;
-
       // Pre-compute circadian delta (activity - expected midpoint for that hour)
       const recordHour: number =
         record.hour !== undefined && record.hour !== null
@@ -407,7 +393,6 @@ const calculateStatistics = (aggregates: any[]): { stats: HealthStatistics; data
       activities: [] as number[],
       thiBatches: [] as number[],
       lethargyAlerts: 0,
-      hrSum: 0,
       deltaSum: 0,
       deltaCount: 0,
       totalFields: 0,
@@ -421,7 +406,6 @@ const calculateStatistics = (aggregates: any[]): { stats: HealthStatistics; data
   const avgTHI = result.thiBatches.length > 0 ? result.thiBatches.reduce((a: number, b: number) => a + b, 0) / result.thiBatches.length : 0;
   const minTemp = result.temps.length > 0 ? Math.min(...result.temps) : 0;
   const maxTemp = result.temps.length > 0 ? Math.max(...result.temps) : 0;
-  const avgHR = validRecords.length > 0 ? Math.round(result.hrSum / validRecords.length) : 0;
   const avgCircadianDelta = result.deltaCount > 0
     ? Math.round((result.deltaSum / result.deltaCount) * 100) / 100
     : 0;
@@ -437,7 +421,6 @@ const calculateStatistics = (aggregates: any[]): { stats: HealthStatistics; data
     avgTemp: Math.round(avgTemp * 10) / 10,
     minTemp: Math.round(minTemp * 10) / 10,
     maxTemp: Math.round(maxTemp * 10) / 10,
-    avgHR,
     avgActivity: Math.round(avgActivity * 10) / 10,
     avgTHI: Math.round(avgTHI * 10) / 10,
     avgCircadianDelta,
@@ -477,7 +460,6 @@ const formatContextForLLM = (
   lines.push('|---|---|');
   lines.push(`| **Body Temperature (avg)** | ${formatNumber(stats.avgTemp)}°C |`);
   lines.push(`| **Body Temperature (range)** | ${formatNumber(stats.minTemp)}°C – ${formatNumber(stats.maxTemp)}°C |`);
-  lines.push(`| **Heart Rate (avg)** | ${stats.avgHR} bpm |`);
   lines.push(`| **Activity Level (avg)** | ${formatActivityWithContext(stats.avgActivity)} |`);
   lines.push(`| **THI (avg)** | ${formatTHIWithContext(stats.avgTHI)} |`);
   lines.push(`| **Lethargy Alerts** | ${stats.lethargyAlerts} instance(s) |`);
@@ -488,8 +470,8 @@ const formatContextForLLM = (
   // --- Per-Record Breakdown ---
   lines.push(`## Data Breakdown (${aggregates.length} records)`);
   lines.push('');
-  lines.push('| # | Timestamp | Temp (°C) | Humidity (%) | Heart Rate | Activity | Circadian Δ | THI | Status |');
-  lines.push('|---|---|---|---|---|---|---|---|---|');
+  lines.push('| # | Timestamp | Temp (°C) | Humidity (%) | Activity | Circadian Δ | THI | Status |');
+  lines.push('|---|---|---|---|---|---|---|---|');
 
   aggregates.forEach((record, index) => {
     const timestamp = record.date
@@ -499,7 +481,6 @@ const formatContextForLLM = (
         : 'Unknown';
     const temp     = formatNumber(record.mean_temp);
     const humidity = formatNumber(record.mean_humidity);
-    const hr       = record.mean_hr ? `${Math.round(record.mean_hr)} bpm` : 'N/A';
     const activity = formatActivityWithContext(record.mean_activity, record.dominant_activity_state);
     const thi      = record.thi ? formatTHIWithContext(record.thi) : 'N/A';
     const status   = record.lethargy_alert ? '⚠️ Lethargy' : '✅ Normal';
@@ -519,7 +500,7 @@ const formatContextForLLM = (
         })()
       : 'N/A';
 
-    lines.push(`| ${index + 1} | ${timestamp} | ${temp} | ${humidity} | ${hr} | ${activity} | ${circDelta} | ${thi} | ${status} |`);
+    lines.push(`| ${index + 1} | ${timestamp} | ${temp} | ${humidity} | ${activity} | ${circDelta} | ${thi} | ${status} |`);
   });
 
   lines.push('');
