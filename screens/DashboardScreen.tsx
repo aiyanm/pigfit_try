@@ -1,4 +1,5 @@
 import { Text, View, ActivityIndicator, Modal, TouchableOpacity, Pressable, TextInput } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import useBLE from '../useBLE';
 import { useEffect, useState } from 'react';
 
@@ -22,14 +23,45 @@ interface LivestockItemProps {
   id: string;
   temp: number;
   feed: number;
+  pitchAngle: number;
   status: string;
   onNavigateToAnalyze?: () => void;
 }
 
-const LivestockItem = ({ id, temp, feed, status, onNavigateToAnalyze }: LivestockItemProps) => {
+const LivestockItem = ({ id, temp, feed, pitchAngle, status, onNavigateToAnalyze }: LivestockItemProps) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [weight, setWeight] = useState('');
   const [isEditingWeight, setIsEditingWeight] = useState(false);
+
+  // Logic to determine feeding status based on pitch angle and feed
+  const getFeedingStatus = () => {
+    // Head down = pitch angle < 45 degrees (eating posture)
+    const isHeadDown = pitchAngle < 45;
+    const isFeedingActive = feed > 0.1;
+
+    if (isHeadDown && isFeedingActive) {
+      return {
+        label: 'Eating',
+        icon: 'restaurant',
+        color: '#10b981',
+        bgColor: '#d1fae5',
+      };
+    } else if (status === 'Active') {
+      return {
+        label: 'Moving',
+        icon: 'fitness',
+        color: '#3b82f6',
+        bgColor: '#dbeafe',
+      };
+    } else {
+      return {
+        label: 'Resting',
+        icon: 'bed',
+        color: '#6b7280',
+        bgColor: '#f3f4f6',
+      };
+    }
+  };
 
   // Logic to determine status color and styling
   const getStatusStyles = () => {
@@ -72,7 +104,7 @@ const LivestockItem = ({ id, temp, feed, status, onNavigateToAnalyze }: Livestoc
           </View> */}
         </View>
 
-        {/* Sensor Data (Temperature, Activity) */}
+        {/* Sensor Data (Temperature, Activity, Feeding Status) */}
         <View className="flex-row justify-between">
           <View className="flex-1">
             <Text className="text-xs text-gray-500">Temp</Text>
@@ -83,8 +115,18 @@ const LivestockItem = ({ id, temp, feed, status, onNavigateToAnalyze }: Livestoc
             <Text className="text-base font-semibold mt-1" style={{ color: statusColor }}>{status}</Text>
           </View>
           <View className="flex-1">
-            <Text className="text-xs text-gray-500">Feed</Text>
-            <Text className="text-base font-semibold text-gray-800 mt-1">{feed.toFixed(2)} kg</Text>
+            <Text className="text-xs text-gray-500">Feeding</Text>
+            <View className="flex-row items-center mt-1">
+              <Ionicons
+                name={getFeedingStatus().icon as any}
+                size={20}
+                color={getFeedingStatus().color}
+                style={{ marginRight: 6 }}
+              />
+              <Text className="text-base font-semibold" style={{ color: getFeedingStatus().color }}>
+                {getFeedingStatus().label}
+              </Text>
+            </View>
           </View>
         </View>
       </TouchableOpacity>
@@ -289,6 +331,7 @@ export default function DashboardScreen({ navigation }: any) {
               id="LIVE-PIG-01"
               temp={receivedData.temp}
               feed={receivedData.feed}
+              pitchAngle={receivedData.pitchAngle}
               status={currentStatus}
               onNavigateToAnalyze={() => navigation.navigate('Analyze')}
             />
