@@ -257,12 +257,19 @@ export default function DashboardScreen({ navigation }: any) {
   const healthIndex = receivedData ? "Good" : "--";
 
   return (
-    <View className="flex-1 bg-gray-100 pt-12 px-5">
-      {/* Header and Subheader */}
-      <Text className="text-2xl font-bold text-gray-800">Farm Monitor</Text>
-      <Text className="text-sm text-gray-500 mb-5">
-        {connectedDevice ? `Connected to ${connectedDevice.name}` : isScanning ? "Scanning for PigFit..." : "Initializing..."}
-      </Text>
+    <View className="flex-1 bg-gray-100">
+      {/* Header */}
+      <View className="flex-row justify-between items-center px-5 pt-12 pb-4 bg-white">
+        <View className="flex-1">
+          <Text className="text-xl font-bold text-gray-800">Farm Monitor</Text>
+          <Text className="text-sm text-gray-500 mt-1">
+            {connectedDevice ? `Connected to ${connectedDevice.name}` : isScanning ? "Scanning for PigFit..." : "Initializing..."}
+          </Text>
+        </View>
+      </View>
+      
+      {/* Content */}
+      <View className="px-5">
       
       {/* --- Overall Status Section --- */}
       <Text className="text-lg font-semibold text-gray-700 mt-5 mb-2.5">Current Status</Text>
@@ -287,23 +294,24 @@ export default function DashboardScreen({ navigation }: any) {
         />
       </View>
 
-      {/* --- Livestock List Section --- */}
-      <Text className="text-lg font-semibold text-gray-700 mt-5 mb-2.5">Live Data</Text>
-      <View className="bg-white rounded-lg shadow-sm">
-        {receivedData ? (
-          <LivestockItem 
-            id="LIVE-PIG-01"
-            temp={receivedData.temp}
-            feed={receivedData.feed}
-            status={currentStatus}
-            onNavigateToAnalyze={() => navigation.navigate('Analyze')}
-          />
-        ) : (
-          <View className="p-5 items-center">
-            <ActivityIndicator size="large" color="#3498db" />
-            <Text className="mt-2.5 text-gray-600">Waiting for data...</Text>
-          </View>
-        )}
+        {/* --- Livestock List Section --- */}
+        <Text className="text-lg font-semibold text-gray-700 mt-5 mb-2.5">Live Data</Text>
+        <View className="bg-white rounded-lg shadow-sm">
+          {receivedData ? (
+            <LivestockItem 
+              id="LIVE-PIG-01"
+              temp={receivedData.temp}
+              feed={receivedData.feed}
+              status={currentStatus}
+              onNavigateToAnalyze={() => navigation.navigate('Analyze')}
+            />
+          ) : (
+            <View className="p-5 items-center">
+              <ActivityIndicator size="large" color="#3498db" />
+              <Text className="mt-2.5 text-gray-600">Waiting for data...</Text>
+            </View>
+          )}
+        </View>
       </View>
     </View>
   );

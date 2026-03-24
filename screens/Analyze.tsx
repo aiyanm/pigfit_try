@@ -150,7 +150,7 @@ const Analyze = () => {
   return (
     <View className="flex-1 bg-gray-100">
       {/* Header */}
-      <View className="flex-row justify-between items-center px-4 py-3 bg-white border-b border-gray-200">
+      <View className="flex-row justify-between items-center px-5 pt-12 pb-4 bg-white">
         <TouchableOpacity>
           <Text className="text-2xl text-gray-800">←</Text>
         </TouchableOpacity>
