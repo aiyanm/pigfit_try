@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import {
   View,
   Text,
@@ -158,7 +159,8 @@ const Analyze = () => {
       {/* Header */}
       <View className="flex-row justify-between items-center px-5 pt-12 pb-4 bg-white">
         <TouchableOpacity>
-          <Text className="text-2xl text-gray-800">←</Text>
+          <Ionicons name="arrow-back" size={24} color="#4B5563" />
+          {/* <Text className="text-2xl text-gray-800">←</Text> */}
         </TouchableOpacity>
         <Text className="text-lg font-semibold text-gray-800">Analyze</Text>
         <TouchableOpacity onPress={() => { setShowDebugPanel(true); checkDatabaseStats(); }}>

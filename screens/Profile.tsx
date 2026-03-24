@@ -59,7 +59,7 @@ export default function Profile() {
         
         {/* Edit Button - RIGHT */}
         <TouchableOpacity className="p-2">
-          <Ionicons name="create-outline" size={24} color="#3b82f6" />
+          <Ionicons name="create-outline" size={24} color="black" />
         </TouchableOpacity>
       </View>
 
