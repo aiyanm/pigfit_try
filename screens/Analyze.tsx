@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,14 +9,28 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { LineChart, BarChart } from 'react-native-gifted-charts';
-import { loadSensorData, SensorDataPoint } from '../services/dataLogger';
+import { loadSensorData, SensorDataPoint, getDatabaseStats } from '../services/dataLogger';
 import { analyzepigHealth, RAGAnalysisResult } from '../services/ragOrchestrator';
 import { AnalysisType } from '../services/promptTemplates';
+import { evaluateDiagnosticHierarchy, DiagnosticResult } from '../services/decisionTree';
 
 const { width } = Dimensions.get('window');
 
 type PigId = 'LIVE-PIG-01' | 'LIVE-PIG-02' | 'LIVE-PIG-03';
 type TrendPeriod = '30m' | '1h' | '4h' | '12h';
+
+// UI Configuration for each diagnostic case
+const CASE_UI_CONFIG: Record<string, {
+  iconBg: string; iconText: string; symbol: string;
+  badgeBg: string; badgeText: string; label: string;
+}> = {
+  A: { iconBg: 'bg-red-100', iconText: 'text-red-600', symbol: '!', badgeBg: 'bg-red-100', badgeText: 'text-red-700', label: 'Alert' },
+  B: { iconBg: 'bg-red-100', iconText: 'text-red-600', symbol: '!', badgeBg: 'bg-red-100', badgeText: 'text-red-700', label: 'Alert' },
+  C: { iconBg: 'bg-yellow-100', iconText: 'text-yellow-600', symbol: '●', badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
+  D: { iconBg: 'bg-blue-100', iconText: 'text-blue-600', symbol: 'ℹ', badgeBg: 'bg-blue-100', badgeText: 'text-blue-700', label: 'Info' },
+  E: { iconBg: 'bg-yellow-100', iconText: 'text-yellow-600', symbol: '●', badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
+  normal: { iconBg: 'bg-green-100', iconText: 'text-green-600', symbol: '✓', badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
+};
 
 const Analyze = () => {
   const [selectedPig, setSelectedPig] = useState<PigId>('LIVE-PIG-01');
@@ -29,6 +43,10 @@ const Analyze = () => {
   const [analysisResults, setAnalysisResults] = useState<RAGAnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [selectedAnalysisType, setSelectedAnalysisType] = useState<AnalysisType>('full');
+
+  // Debug panel state
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [dbStats, setDbStats] = useState<any>(null);
 
   // Load sensor data when period changes
   useEffect(() => {
@@ -56,6 +74,14 @@ const Analyze = () => {
     
     loadData();
   }, [selectedPeriod]);
+
+  // Evaluate diagnostic hierarchy based on current sensor data
+  const diagnosticResult = useMemo((): DiagnosticResult => {
+    if (sensorData.length === 0) return evaluateDiagnosticHierarchy([]);
+    const result = evaluateDiagnosticHierarchy(sensorData);
+    if (result.case !== 'normal') console.log(`📋 Case ${result.case}: ${result.title}`);
+    return result;
+  }, [sensorData]);
 
   // Handle AI Analysis - Retrieves SQLite data via RAG and sends to LLM
   const handleAnalyze = async () => {
@@ -88,6 +114,12 @@ const Analyze = () => {
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // Check database stats for debug panel
+  const checkDatabaseStats = async () => {
+    const stats = await getDatabaseStats();
+    setDbStats(stats);
   };
 
   // Transform sensor data for temperature chart
@@ -123,8 +155,8 @@ const Analyze = () => {
           <Text className="text-2xl text-gray-800">←</Text>
         </TouchableOpacity>
         <Text className="text-lg font-semibold text-gray-800">Analyze</Text>
-        <TouchableOpacity>
-          <Text className="text-2xl text-gray-800">☰</Text>
+        <TouchableOpacity onPress={() => { setShowDebugPanel(true); checkDatabaseStats(); }}>
+          <Text className="text-2xl text-gray-600">🔍</Text>
         </TouchableOpacity>
       </View>
 
@@ -282,67 +314,32 @@ const Analyze = () => {
           )}
         </View>
 
-        {/* Insights Section */}
-        <View className="bg-white mx-4 mt-3 p-4 rounded-xl border border-gray-200">
-          <View className="flex-row items-center gap-3">
-            <View className="w-2 h-2 rounded-full bg-[#6B8E23]" />
-            <Text className="flex-1 text-[13px] text-gray-800 leading-[18px]">
-              Slight temperature increase noted overnight.
-            </Text>
-          </View>
-        </View>
 
-        {/* Events & Alerts Section */}
+        {/* Events & Alerts Section — Driven by Hierarchical Decision Tree */}
         <View className="bg-white mx-4 mt-4 p-4 rounded-xl border border-gray-200">
-
-          {/* Header with Filter Tabs */}
           <View className="flex-row justify-between items-center mb-4">
             <Text className="text-base font-bold text-gray-900">Events & Alerts</Text>
           </View>
 
-          {/* Alert Items */}
           <View className="gap-1">
-            {/* High THI Alert
-            <View className="flex-row items-start gap-3 pb-3 border-b border-gray-100">
-              <View className="w-6 h-6 rounded-full bg-red-100 items-center justify-center mt-0.5">
-                <Text className="text-red-600 font-bold text-xs">!</Text>
+            {isLoading ? (
+              <View className="py-4 items-center">
+                <ActivityIndicator size="small" color="#4CAF50" />
               </View>
-              <View className="flex-1">
-                <Text className="text-sm font-semibold text-gray-900 mb-0.5">High THI Alert</Text>
-                <Text className="text-xs text-gray-500">14:30 Yesterday • THI reached 79</Text>
+            ) : (
+              <View className="flex-row items-start gap-3">
+                <View className={`w-6 h-6 rounded-full ${CASE_UI_CONFIG[diagnosticResult.case].iconBg} items-center justify-center mt-0.5`}>
+                  <Text className={`${CASE_UI_CONFIG[diagnosticResult.case].iconText} font-bold text-xs`}>{CASE_UI_CONFIG[diagnosticResult.case].symbol}</Text>
+                </View>
+                <View className="flex-1">
+                  <Text className="text-sm font-semibold text-gray-900 mb-0.5">{diagnosticResult.title}</Text>
+                  <Text className="text-xs text-gray-500 mb-2">{diagnosticResult.description}</Text>
+                </View>
+                <View className={`px-3 py-1 rounded-full ${CASE_UI_CONFIG[diagnosticResult.case].badgeBg}`}>
+                  <Text className={`text-xs font-medium ${CASE_UI_CONFIG[diagnosticResult.case].badgeText}`}>{CASE_UI_CONFIG[diagnosticResult.case].label}</Text>
+                </View>
               </View>
-              <View className="px-3 py-1 rounded-full bg-red-100">
-                <Text className="text-xs font-medium text-red-700">Alert</Text>
-              </View>
-            </View>
-
-            {/* Daily Health Check */}
-            {/* <View className="flex-row items-start gap-3 pb-3 border-b border-gray-100">
-              <View className="w-6 h-6 rounded-full bg-green-100 items-center justify-center mt-0.5">
-                <Text className="text-green-600 font-bold text-xs">✓</Text>
-              </View>
-              <View className="flex-1">
-                <Text className="text-sm font-semibold text-gray-900 mb-0.5">Daily Health Check</Text>
-                <Text className="text-xs text-gray-500">09:00 Today • All parameters normal</Text>
-              </View>
-              <View className="px-3 py-1 rounded-full bg-green-100">
-                <Text className="text-xs font-medium text-green-700">Completed</Text>
-              </View>
-            </View>
-
-            {/* Estrus Detected */}
-            {/* <View className="flex-row items-start gap-3">
-              <View className="w-6 h-6 rounded-full bg-yellow-100 items-center justify-center mt-0.5">
-                <Text className="text-yellow-600 font-bold text-xs">●</Text>
-              </View>
-              <View className="flex-1">
-                <Text className="text-sm font-semibold text-gray-900 mb-0.5">Estrus Detected</Text>
-                <Text className="text-xs text-gray-500">17:00 Today • High activity, vocalization</Text>
-              </View>
-              <View className="px-3 py-1 rounded-full bg-yellow-100">
-                <Text className="text-xs font-medium text-yellow-700">Action Required</Text>
-              </View>
-            </View>  */}
+            )}
           </View>
         </View>
 
@@ -438,6 +435,73 @@ const Analyze = () => {
         {/* Bottom spacing for additional content */}
         <View className="h-24" />
       </ScrollView>
+
+      {/* Database Debug Panel Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showDebugPanel}
+        onRequestClose={() => setShowDebugPanel(false)}
+      >
+        <View className="flex-1 bg-black bg-opacity-50 justify-end">
+          <View className="bg-white rounded-t-2xl p-4 max-h-96">
+            {/* Header */}
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-lg font-bold text-gray-900">Database Debug</Text>
+              <TouchableOpacity onPress={() => setShowDebugPanel(false)}>
+                <Text className="text-2xl text-gray-600">✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Stats Display */}
+            <ScrollView>
+              {dbStats ? (
+                <>
+                  <View className="bg-gray-100 p-3 rounded-lg mb-3">
+                    <Text className="text-xs text-gray-600 mb-2">
+                      <Text className="font-bold">Last checked:</Text> {dbStats.timestamp}
+                    </Text>
+                    <Text className="text-sm font-semibold text-gray-800 mb-1">
+                      Raw Sensor Records: <Text className="text-green-600">{dbStats.rawSensorRecords}</Text>
+                    </Text>
+                    <Text className="text-sm font-semibold text-gray-800">
+                      Hourly Aggregates: <Text className="text-blue-600">{dbStats.hourlyAggregates}</Text>
+                    </Text>
+                  </View>
+
+                  {dbStats.latestRecord && (
+                    <View className="bg-gray-50 p-3 rounded-lg mb-3">
+                      <Text className="text-xs font-bold text-gray-700 mb-2">Latest Record:</Text>
+                      <Text className="text-xs text-gray-600 mb-1">
+                        Temp: {dbStats.latestRecord.temp.toFixed(1)}°C
+                      </Text>
+                      <Text className="text-xs text-gray-600 mb-1">
+                        Activity: {dbStats.latestRecord.activityIntensity.toFixed(2)}g
+                      </Text>
+                      <Text className="text-xs text-gray-600 mb-1">
+                        Pitch: {dbStats.latestRecord.pitchAngle.toFixed(1)}°
+                      </Text>
+                      <Text className="text-xs text-gray-600">
+                        Time: {new Date(dbStats.latestRecord.timestamp).toLocaleString()}
+                      </Text>
+                    </View>
+                  )}
+                </>
+              ) : (
+                <Text className="text-sm text-gray-500">Loading...</Text>
+              )}
+            </ScrollView>
+
+            {/* Refresh Button */}
+            <TouchableOpacity 
+              className="bg-blue-600 py-2 rounded-lg items-center mt-3"
+              onPress={checkDatabaseStats}
+            >
+              <Text className="text-white font-semibold text-sm">🔄 Refresh Stats</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };

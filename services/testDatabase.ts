@@ -27,7 +27,6 @@ export const testAggregation = async () => {
       const testData: SensorDataPoint = {
         timestamp: Date.now() + i * 1000, // 1 second apart
         temp: 38.5 + Math.random() * 0.5,
-        hr: 90 + Math.floor(Math.random() * 10),
         envTemp: 25.0 + Math.random() * 2,
         humidity: 65 + Math.random() * 5,
         activityIntensity: Math.random() * 10,

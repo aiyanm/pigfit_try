@@ -1,0 +1,1 @@
+export { analyzepigHealthStream } from './analyzePigHealth';

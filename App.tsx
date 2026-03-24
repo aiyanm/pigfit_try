@@ -1,20 +1,21 @@
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import HomeTab from './navigators/Dashboard';
 import { useEffect } from 'react';
-import { dbService } from './services/database';
+import { initializeAppServices } from './services/app/bootstrap';
 import { initializeNotifications } from './services/notificationService';
 
 export default function App() {
   useEffect(() => {
-    // Initialize database on app launch (MUST happen before BLE data arrives)
-    const initDB = async () => {
+    // Initialize service layer on app launch (DB + AI config)
+    const initServices = async () => {
       try {
-        console.log('🚀 Initializing database at app startup...');
-        await dbService.initialize();
-        console.log('✅ Database ready for data logging');
+        console.log('🚀 Initializing app services at startup...');
+        await initializeAppServices();
+        console.log('✅ Services ready for data logging and analysis');
       } catch (error) {
-        console.error('❌ Failed to initialize database:', error);
+        console.error('❌ Failed to initialize app services:', error);
         // App continues even if DB fails, data will be queued for retry
       }
     };
@@ -30,14 +31,16 @@ export default function App() {
       }
     };
 
-    initDB();
+    initServices();
     initNotifications();
   }, []);
 
   return (
-    <NavigationContainer>
-      <HomeTab />
-      <StatusBar style="auto" />
-    </NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <HomeTab />
+        <StatusBar style="auto" />
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
