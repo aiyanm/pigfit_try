@@ -1,7 +1,7 @@
 import { dbService } from '../../storage/db/client';
 import { calculateTHI, checkLethargy, CIRCADIAN_BASELINE } from '../../diagnostics/metricsService';
 import { getRAGConfig } from '../../core/config';
-import { TrendPeriod } from '../../ingestion/sensorIngestService';
+import type { TrendPeriod } from '../../core/types';
 
 /**
  * RAG (Retrieval-Augmented Generation) Service - OPTIMIZED

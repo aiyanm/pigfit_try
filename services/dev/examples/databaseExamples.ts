@@ -3,7 +3,7 @@
  * This file demonstrates how to query the combined sensor data table
  */
 
-import { dbService } from './database';
+import { dbService } from '../../storage/db/client';
 
 /**
  * Example 1: Get All Sensor Data

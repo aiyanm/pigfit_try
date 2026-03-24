@@ -10,8 +10,8 @@
  * 3. Check the Metro bundler console for output
  */
 
-import { dbService } from './database';
-import { logSensorData, getLogStats, SensorDataPoint } from './dataLogger';
+import { dbService } from '../../storage/db/client';
+import { logSensorData, getLogStats, SensorDataPoint } from '../../ingestion/sensorIngestService';
 
 /**
  * Test 1: Insert test data and verify aggregation

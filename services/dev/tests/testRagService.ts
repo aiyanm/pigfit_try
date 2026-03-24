@@ -8,8 +8,8 @@
  *   await runAllRagTests();
  */
 
-import { dbService } from './database';
-import { prepareRAGContext, clearRAGCache } from './ragService';
+import { dbService } from '../../storage/db/client';
+import { prepareRAGContext, clearRAGCache } from '../../ai/context/contextBuilder';
 
 /**
  * Test 1: Verify database is initialized and has data

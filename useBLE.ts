@@ -9,7 +9,7 @@ import {
 
 import * as ExpoDevice from "expo-device";
 import base64 from "react-native-base64";
-import { initializeLogger, logSensorData } from "./services/dataLogger";
+import { initializeLogger, logSensorData } from "./services";
 import {
   notifyBLEConnected,
   notifyBLEDisconnected,

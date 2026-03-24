@@ -123,7 +123,7 @@ export const stopOrchestratorCleanup = (): void => {
  * 
  * analysisType: Always 'full' for complete health assessment
  */
-export const analyzepigHealth = async (
+export const analyzePigHealth = async (
   pigId: string,
   timeWindow: 'last_hour' | 'last_24h' | 'last_7d' = 'last_24h',
   analysisType: AnalysisType = 'full'
@@ -239,7 +239,7 @@ export const analyzepigHealth = async (
  * Stream RAG analysis (for real-time UI updates)
  * analysisType: 'full'
  */
-export const analyzepigHealthStream = async function* (
+export const analyzePigHealthStream = async function* (
   pigId: string,
   timeWindow: 'last_hour' | 'last_24h' | 'last_7d' = 'last_24h',
   analysisType: AnalysisType = 'full'
@@ -337,7 +337,7 @@ export const analyzePigGroupHealth = async (
     const results = await Promise.all(
       pigIds.map(pigId =>
         rateLimiter.schedule(() =>
-          analyzepigHealth(pigId, timeWindow, analysisType)
+          analyzePigHealth(pigId, timeWindow, analysisType)
         )
       )
     );
@@ -411,3 +411,7 @@ export const validateOrchestratorConfig = (): { valid: boolean; errors: string[]
 export const estimateCost = (): number => {
   return 0; // Groq is free
 };
+
+// Backward-compat aliases for legacy imports.
+export const analyzepigHealth = analyzePigHealth;
+export const analyzepigHealthStream = analyzePigHealthStream;

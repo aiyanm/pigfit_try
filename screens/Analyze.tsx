@@ -9,10 +9,16 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { LineChart, BarChart } from 'react-native-gifted-charts';
-import { loadSensorData, SensorDataPoint, getDatabaseStats } from '../services/dataLogger';
-import { analyzepigHealth, RAGAnalysisResult } from '../services/ragOrchestrator';
-import { AnalysisType } from '../services/promptTemplates';
-import { evaluateDiagnosticHierarchy, DiagnosticResult } from '../services/decisionTree';
+import {
+  AnalysisType,
+  DiagnosticResult,
+  RAGAnalysisResult,
+  SensorDataPoint,
+  analyzePigHealth,
+  evaluateDiagnosticHierarchy,
+  getDatabaseStats,
+  loadSensorData,
+} from '../services';
 
 const { width } = Dimensions.get('window');
 
@@ -91,7 +97,7 @@ const Analyze = () => {
       
       // This calls ragService which gets data from SQLite (period_aggregates or hourly_aggregates)
       // selectedAnalysisType determines which prompt template to use
-      const result = await analyzepigHealth(selectedPig, 'last_24h', selectedAnalysisType);
+      const result = await analyzePigHealth(selectedPig, 'last_24h', selectedAnalysisType);
       
       setAnalysisResults(result);
       setShowAnalysisResults(true);

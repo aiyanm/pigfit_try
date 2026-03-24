@@ -10,14 +10,14 @@ import {
   clearOrchestratorCache,
   validateOrchestratorConfig,
   estimateCost,
-} from './ragOrchestrator';
+} from '../../ai/analysis/analyzePigHealth';
 
 import {
   initializeRAGConfig,
   getGroqApiKey,
   setGroqApiKey,
   getRAGConfig,
-} from './ragConfig';
+} from '../../core/config';
 
 /**
  * EXAMPLE 1: Simple analysis

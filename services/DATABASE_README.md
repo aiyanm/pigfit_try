@@ -69,7 +69,7 @@ Your PigFit app now stores BLE sensor data in a **SQLite database** with a singl
 Every time your BLE device sends data, it's **automatically stored in the combined table**:
 
 ```typescript
-// From dataLogger.ts - this happens automatically!
+// From ingestion/sensorIngestService.ts - this happens automatically!
 await dbService.insertSensorData({
   timestamp: data.timestamp,
   device_id: deviceId,
@@ -93,7 +93,7 @@ await dbService.insertSensorData({
 ### **Example 1: Get All Sensor Data**
 
 ```typescript
-import { dbService } from "./services/database";
+import { dbService } from "./services/storage/db/client";
 
 // Get last 24 hours of all sensor data
 const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
@@ -173,8 +173,8 @@ console.log(`
 ### **Current Setup:**
 
 1. **`useBLE.ts`** receives BLE data from Arduino
-2. Calls `logSensorData()` from **`dataLogger.ts`**
-3. **`dataLogger.ts`** automatically:
+2. Calls `logSensorData()` from **`ingestion/sensorIngestService.ts`**
+3. **`ingestion/sensorIngestService.ts`** automatically:
    - ✅ Inserts into `sensor_data` table (all fields)
    - ✅ Updates `hourly_aggregates` table
    - ✅ Saves JSON file backup
@@ -239,7 +239,7 @@ import {
   exportAllDataAsCSV,
   exportEnvironmentalDataAsCSV,
   exportPigDataAsCSV,
-} from "./services/databaseExamples";
+} from "./services/dev/examples/databaseExamples";
 
 // Export all sensor data
 const allCSV = await exportAllDataAsCSV();
@@ -342,9 +342,9 @@ const avgActivity =
 
 | File                           | Purpose                                |
 | ------------------------------ | -------------------------------------- |
-| `services/database.ts`         | Main SQLite service with all queries   |
-| `services/dataLogger.ts`       | Updated to use combined table          |
-| `services/databaseExamples.ts` | Usage examples and export functions    |
+| `services/storage/db/client.ts` | Main SQLite service with all queries |
+| `services/ingestion/sensorIngestService.ts` | Logging + retrieval service |
+| `services/dev/examples/databaseExamples.ts` | Usage examples and export functions |
 | `useBLE.ts`                    | Already calls the logger automatically |
 
 ---
@@ -408,3 +408,4 @@ hourly_aggregates
 ---
 
 **Your BLE data is now in a single unified table for simple, efficient querying! 🎉**
+

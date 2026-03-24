@@ -1,19 +1,9 @@
-import { generateContextualInputs, HourlyAggregates, classifyActivityState, calculateTHI, checkLethargy } from '../diagnostics/metricsService';
+import { generateContextualInputs, classifyActivityState, calculateTHI, checkLethargy } from '../diagnostics/metricsService';
 import { dbService } from '../storage/db/client';
+import type { SensorDataPoint, TrendPeriod } from '../core/types';
 
-// Timeframe options that match the Analyze screen
-export type TrendPeriod = '30m' | '1h' | '4h' | '12h';
-
-// Interface for sensor data point
-export interface SensorDataPoint {
-  timestamp: number;
-  temp: number;
-  envTemp: number;
-  humidity: number;
-  activityIntensity: number;
-  pitchAngle: number;
-  feed: number;
-}
+// Re-export shared domain types for backward compatibility with legacy imports.
+export type { SensorDataPoint, TrendPeriod };
 
 // Current device and pig IDs
 let currentDeviceId: string = 'PigFit_Device';

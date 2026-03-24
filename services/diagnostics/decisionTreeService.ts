@@ -9,7 +9,7 @@
  * - Case E: Cold — Low temperature
  */
 
-import { SensorDataPoint } from '../ingestion/sensorIngestService';
+import type { SensorDataPoint } from '../core/types';
 import { calculateTHI, ACTIVITY_THRESHOLDS } from './metricsService';
 
 export type DiagnosticCase = 'A' | 'B' | 'C' | 'D' | 'E' | 'normal';

@@ -1,1 +1,1 @@
-export { analyzepigHealthStream } from './analyzePigHealth';
+export { analyzePigHealthStream, analyzepigHealthStream } from './analyzePigHealth';
