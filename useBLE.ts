@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 import {
   BleError,
@@ -29,7 +29,7 @@ interface PigFitData {
   feed: number;
 }
 
-interface BluetoothLowEnergyApi {
+export interface BluetoothLowEnergyApi {
   requestPermissions(): Promise<boolean>;
   scanForPeripherals(): void;
   connectToDevice: (deviceId: Device) => Promise<void>;
@@ -48,6 +48,12 @@ function useBLE(): BluetoothLowEnergyApi {
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
   const [receivedData, setReceivedData] = useState<PigFitData | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const scanStateSubscriptionRef = useRef<{ remove: () => void } | null>(null);
+  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disconnectionSubscriptionRef = useRef<{ remove: () => void } | null>(null);
+  const characteristicSubscriptionRef = useRef<{ remove: () => void } | null>(null);
 
   // Initialize the data logger when component mounts
   useEffect(() => {
@@ -164,11 +170,29 @@ function useBLE(): BluetoothLowEnergyApi {
   const isDuplicteDevice = (devices: Device[], nextDevice: Device) =>
     devices.findIndex((device) => nextDevice.id === device.id) > -1;
 
+  const stopScan = () => {
+    bleManager.stopDeviceScan();
+    if (scanStateSubscriptionRef.current) {
+      scanStateSubscriptionRef.current.remove();
+      scanStateSubscriptionRef.current = null;
+    }
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
+    setIsScanning(false);
+  };
+
   const scanForPeripherals = () => {
+    if (isScanning) {
+      return;
+    }
+
     console.log(">>> Starting BLE scan...");
     
     // CRITICAL: Stop any existing scans first
-    bleManager.stopDeviceScan();
+    stopScan();
+    setIsScanning(true);
     console.log(">>> Stopped any existing scans");
     
     // Check BLE state first
@@ -190,11 +214,12 @@ function useBLE(): BluetoothLowEnergyApi {
             console.log(">>> This might be a BLE library issue. Try restarting the app.");
           }
         }, 5000);
+        scanTimeoutRef.current = timeoutId;
         
         bleManager.startDeviceScan(null, null, (error, device) => {
           if (error) {
             console.log("❌ Scan Error:", error);
-            clearTimeout(timeoutId);
+            stopScan();
             return;
           }
           if (device) {
@@ -203,8 +228,7 @@ function useBLE(): BluetoothLowEnergyApi {
             
             if (device.name?.includes(PIGFIT_DEVICE_NAME)) {
               console.log("🎉 >>> FOUND PIGFIT DEVICE! Connecting... <<<");
-              clearTimeout(timeoutId);
-              bleManager.stopDeviceScan(); // STOP SCANNING
+              stopScan(); // STOP SCANNING
               console.log(">>> Stopped scanning");
               setAllDevices((prevState: Device[]) => {
                 if (!isDuplicteDevice(prevState, device)) {
@@ -216,12 +240,19 @@ function useBLE(): BluetoothLowEnergyApi {
           }
         });
         subscription.remove();
+        scanStateSubscriptionRef.current = null;
       }
     }, true);
+    scanStateSubscriptionRef.current = subscription;
   };
 
   const connectToDevice = async (device: Device) => {
+    if (isConnecting || connectedDevice?.id === device.id) {
+      return;
+    }
+
     try {
+      setIsConnecting(true);
       const deviceConnection = await bleManager.connectToDevice(device.id);
       setConnectedDevice(deviceConnection);
       await deviceConnection.discoverAllServicesAndCharacteristics();
@@ -234,7 +265,7 @@ function useBLE(): BluetoothLowEnergyApi {
         console.log("⚠️ MTU request failed, using default:", mtuError);
       }
       
-      bleManager.stopDeviceScan();
+      stopScan();
 
       // Store device metadata in database
       try {
@@ -271,13 +302,23 @@ function useBLE(): BluetoothLowEnergyApi {
       startStreamingData(deviceConnection);
     } catch (e) {
       console.log("FAILED TO CONNECT", e);
+    } finally {
+      setIsConnecting(false);
     }
   };
 
   const disconnectFromDevice = async () => {
     if (connectedDevice) {
       const deviceName = connectedDeviceName || connectedDevice.name || "PigFit Device";
-      bleManager.cancelDeviceConnection(connectedDevice.id);
+      if (characteristicSubscriptionRef.current) {
+        characteristicSubscriptionRef.current.remove();
+        characteristicSubscriptionRef.current = null;
+      }
+      if (disconnectionSubscriptionRef.current) {
+        disconnectionSubscriptionRef.current.remove();
+        disconnectionSubscriptionRef.current = null;
+      }
+      await bleManager.cancelDeviceConnection(connectedDevice.id);
       setConnectedDevice(null);
       setConnectedDeviceName(null);
       setReceivedData(null);
@@ -288,6 +329,10 @@ function useBLE(): BluetoothLowEnergyApi {
   };
 
   const setupDisconnectionListener = (device: Device, manager: BleManager) => {
+    if (disconnectionSubscriptionRef.current) {
+      disconnectionSubscriptionRef.current.remove();
+    }
+
     // Monitor for unexpected device disconnection
     const subscription = manager.onDeviceDisconnected(
       device.id,
@@ -304,8 +349,10 @@ function useBLE(): BluetoothLowEnergyApi {
 
         // Clean up subscription
         subscription.remove();
+        disconnectionSubscriptionRef.current = null;
       }
     );
+    disconnectionSubscriptionRef.current = subscription;
   };
 
   const onDataUpdate = (
@@ -400,7 +447,10 @@ function useBLE(): BluetoothLowEnergyApi {
 
   const startStreamingData = async (device: Device) => {
     if (device) {
-      device.monitorCharacteristicForService(
+      if (characteristicSubscriptionRef.current) {
+        characteristicSubscriptionRef.current.remove();
+      }
+      characteristicSubscriptionRef.current = device.monitorCharacteristicForService(
         PIGFIT_SERVICE_UUID,
         PIGFIT_CHARACTERISTIC_UUID,
         onDataUpdate
@@ -409,6 +459,19 @@ function useBLE(): BluetoothLowEnergyApi {
       console.log("No Device Connected");
     }
   };
+
+  useEffect(() => {
+    return () => {
+      stopScan();
+      if (characteristicSubscriptionRef.current) {
+        characteristicSubscriptionRef.current.remove();
+      }
+      if (disconnectionSubscriptionRef.current) {
+        disconnectionSubscriptionRef.current.remove();
+      }
+      bleManager.destroy();
+    };
+  }, [bleManager]);
 
   return {
     scanForPeripherals,

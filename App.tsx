@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { initializeAppServices } from './services/app/bootstrap';
 import { initializeNotifications } from './services/notificationService';
+import { BLEProvider } from './providers/BLEProvider';
 
 export default function App() {
   const [isInitialized, setIsInitialized] = useState(false);
@@ -63,10 +64,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <HomeTab />
-        <StatusBar style="auto" />
-      </NavigationContainer>
+      <BLEProvider>
+        <NavigationContainer>
+          <HomeTab />
+          <StatusBar style="auto" />
+        </NavigationContainer>
+      </BLEProvider>
     </SafeAreaProvider>
   );
 }

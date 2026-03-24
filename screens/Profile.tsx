@@ -1,7 +1,7 @@
 import { View, Text, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useState, useEffect } from 'react';
-import useBLE from '../useBLE';
+import { useBLEContext } from '../providers/BLEProvider';
 import DeviceScanningModal from './components/DeviceScanningModal';
 
 // Device Item Component with Inline Editing
@@ -96,7 +96,7 @@ export default function Profile() {
     requestPermissions,
     scanForPeripherals,
     allDevices,
-  } = useBLE();
+  } = useBLEContext();
   
   const [showScanningModal, setShowScanningModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);

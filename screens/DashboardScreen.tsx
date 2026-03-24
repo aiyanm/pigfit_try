@@ -1,6 +1,6 @@
 import { Text, View, ActivityIndicator, Modal, TouchableOpacity, Pressable, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import useBLE from '../useBLE';
+import { useBLEContext } from '../providers/BLEProvider';
 import { useEffect, useState } from 'react';
 
 // --- STATUS CARD COMPONENT ---
@@ -250,13 +250,12 @@ const LivestockItem = ({ id, temp, feed, pitchAngle, status, onNavigateToAnalyze
 // --- DASHBOARD SCREEN COMPONENT ---
 export default function DashboardScreen({ navigation }: any) {
   const {
-    requestPermissions,
-    scanForPeripherals,
     allDevices,
     connectToDevice,
     connectedDevice,
+    connectedDeviceName,
     receivedData,
-  } = useBLE();
+  } = useBLEContext();
 
   const [isScanning, setIsScanning] = useState(false);
 
@@ -292,7 +291,7 @@ export default function DashboardScreen({ navigation }: any) {
         <View className="flex-1">
           <Text className="text-xl font-bold text-gray-800">Farm Monitor</Text>
           <Text className="text-sm text-gray-500 mt-1">
-            {connectedDevice ? `Connected to ${connectedDevice.name}` : "No device connected"}
+            {connectedDevice ? `Connected to ${connectedDeviceName || connectedDevice.name}` : "No device connected"}
           </Text>
         </View>
       </View>
