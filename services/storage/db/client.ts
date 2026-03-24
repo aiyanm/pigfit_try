@@ -203,12 +203,26 @@ class DatabaseService {
         );
       `);
 
+      // Devices Table — store device metadata
+      await this.db.execAsync(`
+        CREATE TABLE IF NOT EXISTS devices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_id TEXT UNIQUE NOT NULL,
+          device_mac TEXT NOT NULL,
+          device_name TEXT NOT NULL,
+          pairing_date INTEGER NOT NULL,
+          last_connected INTEGER,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
       // Create indexes for better query performance
       await this.db.execAsync(`
         CREATE INDEX IF NOT EXISTS idx_sensor_timestamp ON sensor_data(timestamp);
         CREATE INDEX IF NOT EXISTS idx_sensor_pig_id ON sensor_data(pig_id);
         CREATE INDEX IF NOT EXISTS idx_hourly_date ON hourly_aggregates(date, hour);
         CREATE INDEX IF NOT EXISTS idx_period_pig ON period_aggregates(pig_id, period_type, bucket_start);
+        CREATE INDEX IF NOT EXISTS idx_device_id ON devices(device_id);
       `);
 
       // Migrate existing tables: add new columns if they don't exist yet
@@ -493,6 +507,101 @@ class DatabaseService {
     } catch (error) {
       console.error('❌ Error deleting old data:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Save a new device to the devices table
+   */
+  async saveDevice(deviceId: string, deviceMac: string, deviceName: string): Promise<void> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) throw new Error('Database connection is null');
+
+      await this.db.runAsync(
+        `INSERT OR REPLACE INTO devices (device_id, device_mac, device_name, pairing_date, last_connected)
+         VALUES (?, ?, ?, ?, ?)`,
+        [deviceId, deviceMac, deviceName, Date.now(), Date.now()]
+      );
+      console.log('✅ Device saved:', deviceId);
+    } catch (error) {
+      console.error('❌ Error saving device:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get device by device_id
+   */
+  async getDevice(deviceId: string): Promise<any | null> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) return null;
+
+      const result = await this.db.getFirstAsync(
+        `SELECT * FROM devices WHERE device_id = ? LIMIT 1`,
+        [deviceId]
+      );
+      return result || null;
+    } catch (error) {
+      console.error('❌ Error getting device:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Update device name
+   */
+  async updateDeviceName(deviceId: string, newName: string): Promise<void> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) throw new Error('Database connection is null');
+
+      await this.db.runAsync(
+        `UPDATE devices SET device_name = ? WHERE device_id = ?`,
+        [newName, deviceId]
+      );
+      console.log('✅ Device name updated:', deviceId, '->', newName);
+    } catch (error) {
+      console.error('❌ Error updating device name:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the last paired device (most recent pairing_date)
+   */
+  async getLastPairedDevice(): Promise<any | null> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) return null;
+
+      const result = await this.db.getFirstAsync(
+        `SELECT * FROM devices ORDER BY pairing_date DESC LIMIT 1`
+      );
+      return result || null;
+    } catch (error) {
+      console.error('❌ Error getting last paired device:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Update device's last_connected timestamp
+   */
+  async updateDeviceLastConnected(deviceId: string): Promise<void> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) throw new Error('Database connection is null');
+
+      await this.db.runAsync(
+        `UPDATE devices SET last_connected = ? WHERE device_id = ?`,
+        [Date.now(), deviceId]
+      );
+      console.log('✅ Device last_connected updated:', deviceId);
+    } catch (error) {
+      console.error('❌ Error updating device last_connected:', error);
+      throw error;
     }
   }
 

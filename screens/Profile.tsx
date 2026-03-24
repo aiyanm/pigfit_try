@@ -1,50 +1,143 @@
-import { View, Text, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useState, useEffect } from 'react';
 import useBLE from '../useBLE';
+import DeviceScanningModal from './components/DeviceScanningModal';
 
-// Device Item Component
+// Device Item Component with Inline Editing
 interface DeviceItemProps {
   name: string;
-  status: 'connected' | 'disconnected';
-  onPress?: () => void;
+  status: 'connected' | 'disconnected' | 'offline';
+  onNameChange: (newName: string) => Promise<void>;
 }
 
-const DeviceItem = ({ name, status, onPress }: DeviceItemProps) => {
+const DeviceItem = ({ name, status, onNameChange }: DeviceItemProps) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedName, setEditedName] = useState(name);
+  const [isSaving, setIsSaving] = useState(false);
   const isConnected = status === 'connected';
   
+  const handleSaveName = async () => {
+    if (editedName.trim() === '') {
+      Alert.alert('Invalid Name', 'Device name cannot be empty');
+      setEditedName(name);
+      return;
+    }
+    
+    if (editedName.trim() === name) {
+      setIsEditing(false);
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await onNameChange(editedName.trim());
+      setIsEditing(false);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update device name');
+      setEditedName(name);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
-    <TouchableOpacity 
-      className="flex-row items-center p-4 bg-white rounded-xl mb-3"
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
+    <View className="flex-row items-center p-4 bg-white rounded-xl mb-3">
       {/* Icon */}
       <View className="w-12 h-12 bg-blue-50 rounded-xl items-center justify-center mr-4">
         <Ionicons name="bluetooth" size={24} color="#3b82f6" />
       </View>
       
       {/* Device Info */}
-      <View className="flex-1">
-        <Text className="font-semibold text-gray-900 text-base">{name}</Text>
-        <Text className={`text-sm ${isConnected ? 'text-gray-500' : 'text-gray-400'}`}>
-          {isConnected ? 'Connected' : 'Disconnected'}
-        </Text>
-      </View>
+      {isEditing ? (
+        <View className="flex-1 flex-row items-center">
+          <TextInput
+            className="flex-1 bg-blue-50 rounded-lg px-3 py-2 text-base text-gray-900 font-semibold"
+            value={editedName}
+            onChangeText={setEditedName}
+            onSubmitEditing={handleSaveName}
+            onBlur={handleSaveName}
+            placeholder="Device name"
+            editable={!isSaving}
+            autoFocus
+          />
+          {isSaving && <ActivityIndicator animating size="small" color="#3b82f6" />}
+        </View>
+      ) : (
+        <View className="flex-1">
+          <TouchableOpacity onPress={() => setIsEditing(true)}>
+            <Text className="font-semibold text-gray-900 text-base">{editedName}</Text>
+          </TouchableOpacity>
+          <Text className={`text-sm ${isConnected ? 'text-gray-500' : 'text-gray-400'}`}>
+            {isConnected ? 'Connected' : status === 'offline' ? 'Offline' : 'Disconnected'}
+          </Text>
+        </View>
+      )}
       
       {/* Status Indicator and Arrow */}
-      <View className="flex-row items-center">
+      <View className="flex-row items-center ml-2">
         <View 
           className="w-3 h-3 rounded-full mr-3"
-          style={{ backgroundColor: isConnected ? '#10b981' : '#9ca3af' }}
+          style={{ 
+            backgroundColor: isConnected ? '#10b981' : status === 'offline' ? '#d1d5db' : '#9ca3af'
+          }}
         />
-        <Text className="text-gray-400 text-xl">›</Text>
+        {!isEditing && <Text className="text-gray-400 text-xl">›</Text>}
       </View>
-    </TouchableOpacity>
+    </View>
   );
 };
 
 export default function Profile() {
-  const { connectedDevice } = useBLE();
+  const { 
+    connectedDevice, 
+    connectedDeviceName,
+    updateConnectedDeviceName,
+    requestPermissions,
+    scanForPeripherals,
+    allDevices,
+  } = useBLE();
+  
+  const [showScanningModal, setShowScanningModal] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+
+  const handlePairDevice = async () => {
+    setShowScanningModal(true);
+    setIsScanning(true);
+    
+    try {
+      const granted = await requestPermissions();
+      if (granted) {
+        scanForPeripherals();
+      } else {
+        Alert.alert('Permission Denied', 'Bluetooth permissions are required to pair a device');
+        setShowScanningModal(false);
+        setIsScanning(false);
+      }
+    } catch (error) {
+      console.error('Error requesting permissions:', error);
+      setShowScanningModal(false);
+      setIsScanning(false);
+    }
+  };
+
+  const handleModalCancel = () => {
+    setShowScanningModal(false);
+    setIsScanning(false);
+  };
+
+  const handleModalConnected = () => {
+    setShowScanningModal(false);
+    setIsScanning(false);
+  };
+
+  // Monitor connectedDevice changes to update scanning state
+  useEffect(() => {
+    if (connectedDevice && isScanning) {
+      setIsScanning(false);
+    }
+  }, [connectedDevice, isScanning]);
+  
   return (
     <ScrollView className="flex-1 bg-gray-50">
       {/* Header */}
@@ -108,9 +201,9 @@ export default function Profile() {
         {/* Show connected device if available */}
         {connectedDevice ? (
           <DeviceItem 
-            name="LIVE-PIG-01" 
+            name={connectedDeviceName || connectedDevice.name || 'PigFit Device'} 
             status="connected"
-            onPress={() => console.log('Navigate to device LIVE-PIG-01')}
+            onNameChange={updateConnectedDeviceName}
           />
         ) : (
           <View className="p-4 bg-gray-50 rounded-xl mb-3">
@@ -122,7 +215,7 @@ export default function Profile() {
         <TouchableOpacity 
           className="flex-row items-center p-4 bg-white rounded-xl"
           activeOpacity={0.7}
-          onPress={() => console.log('Pair new device')}
+          onPress={handlePairDevice}
         >
           <View className="w-12 h-12 bg-blue-50 rounded-xl items-center justify-center mr-4">
             <Ionicons name="add" size={28} color="#3b82f6" />
@@ -135,6 +228,14 @@ export default function Profile() {
           <Text className="text-gray-400 text-xl">›</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Device Scanning Modal */}
+      <DeviceScanningModal
+        isVisible={showScanningModal}
+        isScanning={isScanning}
+        onCancel={handleModalCancel}
+        onConnected={handleModalConnected}
+      />
     </ScrollView>
   );
 }

@@ -218,21 +218,8 @@ export default function DashboardScreen({ navigation }: any) {
 
   const [isScanning, setIsScanning] = useState(false);
 
-  useEffect(() => {
-    console.log(">>> Dashboard mounted, initializing BLE...");
-    const initBLE = async () => {
-      const granted = await requestPermissions();
-      console.log(">>> Permissions granted:", granted);
-      if (granted) {
-        console.log(">>> Calling scanForPeripherals...");
-        scanForPeripherals();
-        setIsScanning(true);
-      } else {
-        console.log(">>> Permissions DENIED!");
-      }
-    };
-    initBLE();
-  }, []);
+  // BLE scanning is now handled from Profile screen only
+  // No auto-scanning on Dashboard mount
 
   useEffect(() => {
     // Auto-connect to the first found device (which should be PigFit_Device due to filtering)
@@ -263,7 +250,7 @@ export default function DashboardScreen({ navigation }: any) {
         <View className="flex-1">
           <Text className="text-xl font-bold text-gray-800">Farm Monitor</Text>
           <Text className="text-sm text-gray-500 mt-1">
-            {connectedDevice ? `Connected to ${connectedDevice.name}` : isScanning ? "Scanning for PigFit..." : "Initializing..."}
+            {connectedDevice ? `Connected to ${connectedDevice.name}` : "No device connected"}
           </Text>
         </View>
       </View>

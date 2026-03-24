@@ -14,6 +14,7 @@ import {
   notifyBLEConnected,
   notifyBLEDisconnected,
 } from "./services/notificationService";
+import { dbService } from "./services/storage/db/client";
 
 const PIGFIT_DEVICE_NAME = "PigFit_Device";
 const PIGFIT_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -34,14 +35,18 @@ interface BluetoothLowEnergyApi {
   connectToDevice: (deviceId: Device) => Promise<void>;
   disconnectFromDevice: () => void;
   connectedDevice: Device | null;
+  connectedDeviceName: string | null;
   allDevices: Device[];
   receivedData: PigFitData | null;
+  loadDeviceMetadata: (deviceId: string) => Promise<string | null>;
+  updateConnectedDeviceName: (newName: string) => Promise<void>;
 }
 
 function useBLE(): BluetoothLowEnergyApi {
   const bleManager = useMemo(() => new BleManager(), []);
   const [allDevices, setAllDevices] = useState<Device[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
+  const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
   const [receivedData, setReceivedData] = useState<PigFitData | null>(null);
 
   // Initialize the data logger when component mounts
@@ -53,6 +58,42 @@ function useBLE(): BluetoothLowEnergyApi {
       console.error('Failed to initialize logger:', error);
     });
   }, []);
+
+  /**
+   * Load device name from database by device_id
+   */
+  const loadDeviceMetadata = async (deviceId: string): Promise<string | null> => {
+    try {
+      const device = await dbService.getDevice(deviceId);
+      if (device) {
+        console.log('✅ Loaded device metadata:', device.device_name);
+        setConnectedDeviceName(device.device_name);
+        return device.device_name;
+      }
+      return null;
+    } catch (error) {
+      console.error('❌ Error loading device metadata:', error);
+      return null;
+    }
+  };
+
+  /**
+   * Update the connected device's name (in memory and database)
+   */
+  const updateConnectedDeviceName = async (newName: string): Promise<void> => {
+    if (!connectedDevice) {
+      console.warn('⚠️ No connected device to rename');
+      return;
+    }
+    try {
+      await dbService.updateDeviceName(connectedDevice.id, newName);
+      setConnectedDeviceName(newName);
+      console.log('✅ Device name updated to:', newName);
+    } catch (error) {
+      console.error('❌ Error updating device name:', error);
+      throw error;
+    }
+  };
 
 
 
@@ -195,6 +236,32 @@ function useBLE(): BluetoothLowEnergyApi {
       
       bleManager.stopDeviceScan();
 
+      // Store device metadata in database
+      try {
+        // Ensure database is initialized before any operations
+        await dbService.initialize();
+        
+        const existingDevice = await dbService.getDevice(device.id);
+        if (!existingDevice) {
+          // New device: save with auto-generated name
+          const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          const autoName = `PigFit - ${dateStr}`;
+          await dbService.saveDevice(device.id, device.id, autoName);
+          setConnectedDeviceName(autoName);
+          console.log('✅ New device saved with name:', autoName);
+        } else {
+          // Existing device: load stored name
+          setConnectedDeviceName(existingDevice.device_name);
+          console.log('✅ Device loaded with name:', existingDevice.device_name);
+        }
+        // Update last_connected timestamp
+        await dbService.updateDeviceLastConnected(device.id);
+      } catch (dbError) {
+        console.error('❌ Error saving/loading device metadata:', dbError);
+        // Fall back to device BLE name
+        setConnectedDeviceName(device.name || "PigFit Device");
+      }
+
       // Send BLE connected notification
       await notifyBLEConnected(device.name || "PigFit Device");
 
@@ -209,9 +276,10 @@ function useBLE(): BluetoothLowEnergyApi {
 
   const disconnectFromDevice = async () => {
     if (connectedDevice) {
-      const deviceName = connectedDevice.name || "PigFit Device";
+      const deviceName = connectedDeviceName || connectedDevice.name || "PigFit Device";
       bleManager.cancelDeviceConnection(connectedDevice.id);
       setConnectedDevice(null);
+      setConnectedDeviceName(null);
       setReceivedData(null);
 
       // Send BLE disconnected notification
@@ -226,6 +294,7 @@ function useBLE(): BluetoothLowEnergyApi {
       async (error) => {
         console.log(`⚠️ Device ${device.name} disconnected:`, error);
         setConnectedDevice(null);
+        setConnectedDeviceName(null);
         setReceivedData(null);
 
         // Notify user of unexpected disconnection
@@ -347,8 +416,11 @@ function useBLE(): BluetoothLowEnergyApi {
     connectToDevice,
     allDevices,
     connectedDevice,
+    connectedDeviceName,
     disconnectFromDevice,
     receivedData,
+    loadDeviceMetadata,
+    updateConnectedDeviceName,
   };
 }
 
