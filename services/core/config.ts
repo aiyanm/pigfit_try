@@ -18,6 +18,7 @@ export interface RAGConfig {
   // Retry and resilience
   maxRetries?: number;
   retryBackoffMs?: number;
+  deterministicEnabled?: boolean;
 }
 
 /**
@@ -32,6 +33,7 @@ const DEFAULT_CONFIG: RAGConfig = {
   contextTokenLimit: 3500, // Leave room for response
   maxRetries: 5,
   retryBackoffMs: 1000,
+  deterministicEnabled: true,
 };
 
 // Current configuration
@@ -100,5 +102,12 @@ export const resetRAGConfig = (): RAGConfig => {
  */
 export const isConfigured = (): boolean => {
   return !!currentConfig.groqApiKey;
+};
+
+/**
+ * Feature flag for deterministic hourly/daily pipeline.
+ */
+export const isDeterministicEnabled = (): boolean => {
+  return currentConfig.deterministicEnabled !== false;
 };
 

@@ -149,7 +149,6 @@ export const testDataAnalysis = async () => {
     const avgEnvTemp = data.reduce((sum, r) => sum + r.env_temp, 0) / data.length;
     const avgHumidity = data.reduce((sum, r) => sum + r.humidity, 0) / data.length;
     const avgActivity = data.reduce((sum, r) => sum + r.activity_intensity, 0) / data.length;
-    const avgHr = data.reduce((sum, r) => sum + r.hr, 0) / data.length;
 
     console.log('📈 Analysis Results (Last Hour):');
     console.log(`  Records analyzed: ${data.length}`);
@@ -157,7 +156,6 @@ export const testDataAnalysis = async () => {
     console.log(`  Average Env Temperature: ${avgEnvTemp.toFixed(2)}°C`);
     console.log(`  Average Humidity: ${avgHumidity.toFixed(1)}%`);
     console.log(`  Average Activity: ${avgActivity.toFixed(2)}`);
-    console.log(`  Average Heart Rate: ${avgHr.toFixed(0)} bpm`);
     console.log(`  Temp Difference: ${(avgPigTemp - avgEnvTemp).toFixed(2)}°C`);
 
     console.log('\n✅ Analysis test completed!');

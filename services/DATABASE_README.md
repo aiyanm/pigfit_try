@@ -26,7 +26,6 @@ Your PigFit app now stores BLE sensor data in a **SQLite database** with a singl
 | `pig_id`               | TEXT     | Pig identifier (e.g., "LIVE-PIG-01")      |
 | **Pig Data**           |          |                                           |
 | `temp`                 | REAL     | Pig body temperature (°C)                 |
-| `hr`                   | INTEGER  | Heart rate (bpm)                          |
 | `activity_intensity`   | REAL     | Activity level (from gyro/accel)          |
 | `pitch_angle`          | REAL     | Pitch angle in degrees (from gyro)        |
 | `feed`                 | REAL     | Feed consumption (kg)                     |
@@ -76,7 +75,6 @@ await dbService.insertSensorData({
   pig_id: pigId,
   // Pig data
   temp: data.temp,
-  hr: data.hr,
   activity_intensity: data.activityIntensity,
   pitch_angle: data.pitchAngle,
   feed: data.feed,
@@ -104,7 +102,7 @@ const allData = await dbService.getSensorData(
 );
 
 console.log("All sensor data:", allData);
-// Each record contains: temp, hr, activity_intensity, pitch_angle, feed, env_temp, humidity
+// Each record contains: temp, activity_intensity, pitch_angle, feed, env_temp, humidity
 ```
 
 ### **Example 2: Access Environmental Fields Only**
@@ -133,7 +131,6 @@ const sensorData = await dbService.getSensorData(startTime, endTime);
 const pigData = sensorData.map((record) => ({
   timestamp: record.timestamp,
   temp: record.temp,
-  hr: record.hr,
   activity_intensity: record.activity_intensity,
   pitch_angle: record.pitch_angle,
   feed: record.feed,
@@ -370,7 +367,6 @@ sensor_data
 ├─ device_id
 ├─ pig_id (INDEXED)
 ├─ temp (Pig body temperature)
-├─ hr (Heart rate)
 ├─ activity_intensity (Activity from sensors)
 ├─ pitch_angle (Gyro pitch)
 ├─ feed (Feed amount)

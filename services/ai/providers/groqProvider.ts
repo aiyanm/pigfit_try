@@ -22,6 +22,12 @@ export interface LLMResponse {
   error?: string;
 }
 
+export interface GroqCallOptions {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
 const DEFAULT_CONFIG: Partial<LLMConfig> = {
   model: 'gpt-4o-mini',
   temperature: 0.7,
@@ -204,7 +210,8 @@ const callGroqAPI = async (
   systemRole: string,
   userPrompt: string,
   context: string,
-  apiKey: string
+  apiKey: string,
+  options?: GroqCallOptions
 ): Promise<string> => {
   const config = getRAGConfig();
   const controller = new AbortController();
@@ -214,7 +221,7 @@ const callGroqAPI = async (
     const fullUserMessage = `CONTEXT:\n${context}\n\nQUESTION/ANALYSIS:\n${userPrompt}`;
 
     const requestBody = {
-      model: 'mixtral-8x7b-32768',
+      model: options?.model ?? 'llama-3.1-8b-instant',
       messages: [
         {
           role: 'system',
@@ -225,8 +232,8 @@ const callGroqAPI = async (
           content: fullUserMessage,
         },
       ],
-      temperature: config.llmTemperature ?? 0.7,
-      max_tokens: config.llmMaxTokens ?? 350,
+      temperature: options?.temperature ?? config.llmTemperature ?? 0.7,
+      max_tokens: options?.maxTokens ?? config.llmMaxTokens ?? 350,
     };
 
     if (config.debug) {
@@ -293,7 +300,8 @@ export const safeCallGroq = async (
   systemRole: string,
   userPrompt: string,
   context: string,
-  apiKey: string
+  apiKey: string,
+  options?: GroqCallOptions
 ): Promise<LLMResponse> => {
   try {
     if (!apiKey) {
@@ -306,7 +314,7 @@ export const safeCallGroq = async (
 
     console.log('🔐 Calling Groq API');
 
-    const result = await callGroqAPI(systemRole, userPrompt, context, apiKey);
+    const result = await callGroqAPI(systemRole, userPrompt, context, apiKey, options);
 
     return {
       success: true,
@@ -333,7 +341,8 @@ export const streamGroqWithRAG = async function* (
   systemRole: string,
   userPrompt: string,
   context: string,
-  apiKey: string
+  apiKey: string,
+  options?: GroqCallOptions
 ): AsyncGenerator<string, void, unknown> {
   if (!apiKey) {
     throw new Error('Groq API key not provided');
@@ -347,7 +356,7 @@ export const streamGroqWithRAG = async function* (
     const fullUserMessage = `CONTEXT:\n${context}\n\nQUESTION/ANALYSIS:\n${userPrompt}`;
 
     const requestBody = {
-      model: 'mixtral-8x7b-32768',
+      model: options?.model ?? 'llama-3.1-8b-instant',
       messages: [
         {
           role: 'system',
@@ -358,8 +367,8 @@ export const streamGroqWithRAG = async function* (
           content: fullUserMessage,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 350,
+      temperature: options?.temperature ?? config.llmTemperature ?? 0.7,
+      max_tokens: options?.maxTokens ?? config.llmMaxTokens ?? 350,
       stream: true,
     };
 

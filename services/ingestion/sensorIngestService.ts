@@ -1,5 +1,7 @@
 import { generateContextualInputs, classifyActivityState, calculateTHI, checkLethargy } from '../diagnostics/metricsService';
 import { dbService } from '../storage/db/client';
+import { runDailyAssessmentForDay, runHourlyInsightForBucket } from '../ai/deterministic/orchestrator';
+import { isDeterministicEnabled } from '../core/config';
 import type { SensorDataPoint, TrendPeriod } from '../core/types';
 
 // Re-export shared domain types for backward compatibility with legacy imports.
@@ -8,6 +10,94 @@ export type { SensorDataPoint, TrendPeriod };
 // Current device and pig IDs
 let currentDeviceId: string = 'PigFit_Device';
 let currentPigId: string = 'LIVE-PIG-01';
+const lastSeenHourByPig = new Map<string, number>();
+const HOUR_MS = 60 * 60 * 1000;
+
+const toLocalDateString = (ms: number): string => {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const getHourStartMs = (ts: number): number => {
+  const d = new Date(ts);
+  d.setMinutes(0, 0, 0);
+  return d.getTime();
+};
+
+const buildHourlyAggregateFromRows = (pigId: string, bucketStartMs: number, rawRows: any[]) => {
+  if (rawRows.length === 0) return null;
+
+  const sums = rawRows.reduce(
+    (acc: any, row: any) => ({
+      temp: acc.temp + (row.temp ?? 0),
+      envTemp: acc.envTemp + (row.env_temp ?? 0),
+      humidity: acc.humidity + (row.humidity ?? 0),
+      activity: acc.activity + (row.activity_intensity ?? 0),
+      pitch: acc.pitch + (row.pitch_angle ?? 0),
+      feed: acc.feed + (row.feed ?? 0),
+    }),
+    { temp: 0, envTemp: 0, humidity: 0, activity: 0, pitch: 0, feed: 0 }
+  );
+
+  const n = rawRows.length;
+  const meanTemp = sums.temp / n;
+  const meanEnvTemp = sums.envTemp / n;
+  const meanHumidity = sums.humidity / n;
+  const meanActivity = sums.activity / n;
+  const meanPitch = sums.pitch / n;
+  const meanFeed = sums.feed / n;
+  const hour = new Date(bucketStartMs).getHours();
+
+  return {
+    date: toLocalDateString(bucketStartMs),
+    hour,
+    pig_id: pigId,
+    mean_temp: Math.round(meanTemp * 100) / 100,
+    mean_env_temp: Math.round(meanEnvTemp * 100) / 100,
+    mean_humidity: Math.round(meanHumidity * 100) / 100,
+    mean_activity: Math.round(meanActivity * 100) / 100,
+    mean_pitch: Math.round(meanPitch * 100) / 100,
+    mean_feed: Math.round(meanFeed * 100) / 100,
+    sample_count: n,
+    thi: Math.round(calculateTHI(meanEnvTemp, meanHumidity) * 10) / 10,
+    lethargy_alert: checkLethargy(meanActivity, hour) ? 1 : 0,
+    dominant_activity_state: classifyActivityState(meanActivity),
+  };
+};
+
+/**
+ * Finalize and upsert one closed hourly bucket from raw sensor_data.
+ * Exported for deterministic pipeline and test helpers.
+ */
+export const finalizeHourlyAggregateBucket = async (pigId: string, bucketStartMs: number): Promise<void> => {
+  try {
+    const bucketEndMs = bucketStartMs + HOUR_MS - 1;
+    const rawRows = await dbService.getSensorData(bucketStartMs, bucketEndMs, pigId);
+    const aggregate = buildHourlyAggregateFromRows(pigId, bucketStartMs, rawRows);
+
+    if (!aggregate) {
+      return;
+    }
+
+    await dbService.upsertHourlyAggregate(aggregate);
+    console.log(`✅ Finalized hourly aggregate for ${pigId} @ ${aggregate.date} ${aggregate.hour}:00 (${aggregate.sample_count} samples)`);
+  } catch (error) {
+    console.error('❌ Error finalizing hourly aggregate bucket:', error);
+  }
+};
+
+const runDeterministicForClosedHour = async (pigId: string, closedHourStartMs: number): Promise<void> => {
+  if (!isDeterministicEnabled()) return;
+  try {
+    await runHourlyInsightForBucket(pigId, closedHourStartMs);
+    await runDailyAssessmentForDay(pigId, toLocalDateString(closedHourStartMs));
+  } catch (error) {
+    console.error('❌ Error running deterministic pipeline for closed hour:', error);
+  }
+};
 
 /**
  * Initialize the logging system (database only)
@@ -52,6 +142,26 @@ export const logSensorData = async (
       env_temp: data.envTemp,
       humidity: data.humidity,
     });
+
+    // Hour-close finalization:
+    // when we enter a new hour, finalize the previous hour's bucket for this pig.
+    const currentHourStart = getHourStartMs(data.timestamp);
+    const previousHourStart = currentHourStart - HOUR_MS;
+    const lastSeenHourStart = lastSeenHourByPig.get(pigId);
+
+    if (lastSeenHourStart === undefined) {
+      // Best-effort catch-up on app restart: finalize prior closed hour once.
+      await finalizeHourlyAggregateBucket(pigId, previousHourStart);
+      await runDeterministicForClosedHour(pigId, previousHourStart);
+      lastSeenHourByPig.set(pigId, currentHourStart);
+    } else if (currentHourStart > lastSeenHourStart) {
+      await finalizeHourlyAggregateBucket(pigId, lastSeenHourStart);
+      await runDeterministicForClosedHour(pigId, lastSeenHourStart);
+      lastSeenHourByPig.set(pigId, currentHourStart);
+    } else if (currentHourStart < lastSeenHourStart) {
+      // Handle clock skew or out-of-order packets by moving marker backward.
+      lastSeenHourByPig.set(pigId, currentHourStart);
+    }
 
     console.log('✅ Sensor data stored in database');
     
@@ -110,14 +220,15 @@ const summarizeHourlyData = (hour: number, dataPoints: SensorDataPoint[]) => {
  * Loads all individual readings from the SQL database
  */
 export const loadSensorData = async (
-  periodHours: number
+  periodHours: number,
+  pigId?: string
 ): Promise<SensorDataPoint[]> => {
   try {
     const now = Date.now();
     const startTime = now - (periodHours * 60 * 60 * 1000);
     
     // Load from SQL database (has all individual readings)
-    const sqlData = await dbService.getSensorData(startTime, now);
+    const sqlData = await dbService.getSensorData(startTime, now, pigId);
     
     // Convert SQL format to SensorDataPoint format
     const dataPoints: SensorDataPoint[] = sqlData.map((record: any) => ({
@@ -190,6 +301,32 @@ export const getDatabaseStats = async () => {
   }
 };
 
+/**
+ * Get deterministic outputs for UI consumption.
+ */
+export const getDeterministicInsights = async (pigId: string, bucketDay?: string) => {
+  try {
+    const day = bucketDay ?? toLocalDateString(Date.now());
+    const [hourly, daily] = await Promise.all([
+      dbService.getHourlyInsightsByDate(pigId, day),
+      dbService.getDailyAssessment(pigId, day),
+    ]);
+
+    return {
+      bucketDay: day,
+      hourlyInsights: hourly,
+      dailyAssessment: daily,
+    };
+  } catch (error) {
+    console.error('❌ Error getting deterministic insights:', error);
+    return {
+      bucketDay: bucketDay ?? toLocalDateString(Date.now()),
+      hourlyInsights: [],
+      dailyAssessment: null,
+    };
+  }
+};
+
 // ─── Period Aggregate Config ─────────────────────────────────────────────────────
 
 /**
@@ -214,6 +351,47 @@ const PERIOD_BUCKET_MS: Record<TrendPeriod, number> = {
   '1h':  10 * 60 * 1000,
   '4h':  30 * 60 * 1000,
   '12h': 60 * 60 * 1000,
+};
+
+/**
+ * Load chart-ready trend points.
+ * Prefers pre-bucketed period_aggregates; falls back to raw sensor_data if empty.
+ */
+export const loadTrendData = async (
+  periodType: TrendPeriod,
+  pigId: string
+): Promise<SensorDataPoint[]> => {
+  try {
+    const now = Date.now();
+    const periodStart = now - PERIOD_DURATION_MS[periodType];
+    const aggregateRows = await dbService.getPeriodAggregates(periodType, pigId);
+    const windowRows = aggregateRows.filter((row: any) => row.bucket_start >= periodStart);
+
+    if (windowRows.length > 0) {
+      return windowRows.map((row: any) => ({
+        timestamp: row.bucket_start,
+        temp: row.mean_temp ?? 0,
+        envTemp: row.mean_env_temp ?? 0,
+        humidity: row.mean_humidity ?? 0,
+        activityIntensity: row.mean_activity ?? 0,
+        pitchAngle: row.mean_pitch ?? 0,
+        feed: row.mean_feed ?? 0,
+      }));
+    }
+
+    const periodHoursMap: Record<TrendPeriod, number> = {
+      '30m': 0.5,
+      '1h': 1,
+      '4h': 4,
+      '12h': 12,
+    };
+
+    console.log(`⚠️ No period aggregates for ${pigId} [${periodType}], using raw fallback`);
+    return loadSensorData(periodHoursMap[periodType], pigId);
+  } catch (error) {
+    console.error('❌ Error loading trend data:', error);
+    return [];
+  }
 };
 
 /**

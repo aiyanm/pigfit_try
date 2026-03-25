@@ -9,17 +9,17 @@ import {
   Modal,
   ActivityIndicator,
 } from 'react-native';
-import { LineChart, BarChart } from 'react-native-gifted-charts';
+import { LineChart } from 'react-native-gifted-charts';
 import {
-  AnalysisType,
   DiagnosticResult,
-  RAGAnalysisResult,
   SensorDataPoint,
-  analyzePigHealth,
   evaluateDiagnosticHierarchy,
   getDatabaseStats,
+  getDeterministicInsights,
   loadSensorData,
+  loadTrendData,
 } from '../services';
+import { runDeterministicSchemaTests } from '../services/dev/tests/testDeterministicSchema';
 
 const { width } = Dimensions.get('window');
 
@@ -43,17 +43,19 @@ const Analyze = () => {
   const [selectedPig, setSelectedPig] = useState<PigId>('LIVE-PIG-01');
   const [selectedPeriod, setSelectedPeriod] = useState<TrendPeriod>('12h');
   const [sensorData, setSensorData] = useState<SensorDataPoint[]>([]);
+  const [trendData, setTrendData] = useState<SensorDataPoint[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  
-  // Analysis state
-  const [showAnalysisResults, setShowAnalysisResults] = useState(false);
-  const [analysisResults, setAnalysisResults] = useState<RAGAnalysisResult | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [selectedAnalysisType, setSelectedAnalysisType] = useState<AnalysisType>('full');
 
   // Debug panel state
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [dbStats, setDbStats] = useState<any>(null);
+  const [isRunningDeterministicTests, setIsRunningDeterministicTests] = useState(false);
+  const [deterministicTestResult, setDeterministicTestResult] = useState<string | null>(null);
+  const [deterministicData, setDeterministicData] = useState<{
+    bucketDay: string;
+    hourlyInsights: any[];
+    dailyAssessment: any | null;
+  } | null>(null);
 
   // Load sensor data when period changes
   useEffect(() => {
@@ -69,9 +71,13 @@ const Analyze = () => {
         };
         
         const hours = periodHoursMap[selectedPeriod];
-        const data = await loadSensorData(hours);
-        setSensorData(data);
-        console.log(`📊 Loaded ${data.length} data points for ${selectedPeriod}`);
+        const [rawData, aggregatedTrendData] = await Promise.all([
+          loadSensorData(hours, selectedPig),
+          loadTrendData(selectedPeriod, selectedPig),
+        ]);
+        setSensorData(rawData);
+        setTrendData(aggregatedTrendData);
+        console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${selectedPig} (${selectedPeriod})`);
       } catch (error) {
         console.error('Error loading sensor data:', error);
       } finally {
@@ -80,7 +86,26 @@ const Analyze = () => {
     };
     
     loadData();
-  }, [selectedPeriod]);
+  }, [selectedPeriod, selectedPig]);
+
+  // Load deterministic outputs for current pig/day
+  useEffect(() => {
+    let active = true;
+    const loadDeterministic = async () => {
+      try {
+        const data = await getDeterministicInsights(selectedPig);
+        if (active) setDeterministicData(data);
+      } catch (error) {
+        console.error('Error loading deterministic insights:', error);
+      }
+    };
+    loadDeterministic();
+    const timer = setInterval(loadDeterministic, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [selectedPig]);
 
   // Evaluate diagnostic hierarchy based on current sensor data
   const diagnosticResult = useMemo((): DiagnosticResult => {
@@ -90,53 +115,37 @@ const Analyze = () => {
     return result;
   }, [sensorData]);
 
-  // Handle AI Analysis - Retrieves SQLite data via RAG and sends to LLM
-  const handleAnalyze = async () => {
-    setIsAnalyzing(true);
-    try {
-      console.log(`🔍 Starting ${selectedAnalysisType} analysis for pig ${selectedPig}`);
-      
-      // This calls ragService which gets data from SQLite (period_aggregates or hourly_aggregates)
-      // selectedAnalysisType determines which prompt template to use
-      const result = await analyzePigHealth(selectedPig, 'last_24h', selectedAnalysisType);
-      
-      setAnalysisResults(result);
-      setShowAnalysisResults(true);
-      
-      if (result.success) {
-        console.log('✅ Analysis complete');
-      } else {
-        console.error('❌ Analysis returned error:', result.error);
-      }
-    } catch (error) {
-      console.error('❌ Analysis failed:', error);
-      setAnalysisResults({
-        success: false,
-        pigId: selectedPig,
-        analysis: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        executionTime: 0,
-        error: 'Analysis failed',
-      });
-      setShowAnalysisResults(true);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
   // Check database stats for debug panel
   const checkDatabaseStats = async () => {
     const stats = await getDatabaseStats();
     setDbStats(stats);
   };
 
+  // Run deterministic migration/schema smoke tests
+  const handleRunDeterministicSchemaTests = async () => {
+    if (isRunningDeterministicTests) return;
+    setIsRunningDeterministicTests(true);
+    setDeterministicTestResult(null);
+    try {
+      await runDeterministicSchemaTests();
+      setDeterministicTestResult('PASS: All deterministic schema tests passed.');
+      await checkDatabaseStats();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setDeterministicTestResult(`FAIL: ${message}`);
+    } finally {
+      setIsRunningDeterministicTests(false);
+    }
+  };
+
   // Transform sensor data for temperature chart
-  const temperatureData = sensorData.map(point => ({
+  const temperatureData = trendData.map(point => ({
     value: point.temp,
     dataPointText: point.temp.toFixed(1),
   }));
 
   // Transform sensor data for activity chart
-  const activityData = sensorData.map(point => {
+  const activityData = trendData.map(point => {
     const activity = point.activityIntensity * 10; // Scale for better visualization
     return {
       value: activity,
@@ -208,6 +217,25 @@ const Analyze = () => {
             <Text className="text-[32px] font-bold text-green-500">92</Text>
             <Text className="text-sm text-gray-400">/100</Text>
           </View>
+        </View>
+
+        {/* Deterministic Insights Snapshot */}
+        <View className="bg-white mx-4 mb-3 rounded-xl p-4 border border-gray-200">
+          <Text className="text-sm font-semibold text-gray-900 mb-2">Deterministic Insights (Today)</Text>
+          <Text className="text-xs text-gray-500 mb-2">
+            Day: {deterministicData?.bucketDay || '--'}
+          </Text>
+          <Text className="text-xs text-gray-700 mb-1">
+            Hourly insights: {deterministicData?.hourlyInsights?.length ?? 0}
+          </Text>
+          <Text className="text-xs text-gray-700 mb-1">
+            Latest hourly: {deterministicData?.hourlyInsights?.length
+              ? deterministicData.hourlyInsights[deterministicData.hourlyInsights.length - 1].summary
+              : 'No hourly insight yet'}
+          </Text>
+          <Text className="text-xs text-gray-700">
+            Daily: {deterministicData?.dailyAssessment?.summary || 'No daily assessment yet'}
+          </Text>
         </View>
 
         {/* Trends Section */}
@@ -351,95 +379,6 @@ const Analyze = () => {
           </View>
         </View>
 
-        {/* AI Summary & Recommendations Section */}
-        <View className="bg-white mx-4 mt-4 p-4 rounded-xl border border-gray-200">
-          {/* Header with Icon */}
-          <View className="flex-row items-center gap-2 mb-3">
-
-            {/*add icon*/}
-            <Text className="text-2xl"></Text>
-            <Text className="text-base font-bold text-gray-900">AI Summary & Recommendations</Text>
-          </View>
-
-          {/* Disclaimer */}
-          <Text className="text-xs text-gray-500 italic mb-4">
-            Decision-support only. Final decisions by farmer/vet.
-          </Text>
-
-          {/* Analyze Button */}
-          <TouchableOpacity 
-            className={`py-3 rounded-lg items-center ${isAnalyzing ? 'bg-blue-400' : 'bg-blue-600'}`}
-            onPress={handleAnalyze}
-            activeOpacity={0.8}
-            disabled={isAnalyzing}
-          >
-            <Text className="text-white font-semibold text-sm">
-              {isAnalyzing ? 'Analyzing...' : 'Analyze'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Analysis Results Modal */}
-        <Modal
-          animationType="fade"
-          transparent={true}
-          visible={showAnalysisResults}
-          onRequestClose={() => setShowAnalysisResults(false)}
-        >
-          <View className="flex-1 justify-center items-center" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
-            <View className="bg-white rounded-2xl p-6 mx-4 max-h-96 w-96">
-              {/* Modal Header */}
-              <View className="flex-row justify-between items-center mb-4">
-                <Text className="text-lg font-bold text-gray-900">AI Analysis Results</Text>
-                <TouchableOpacity onPress={() => setShowAnalysisResults(false)}>
-                  <Text className="text-2xl text-gray-600">✕</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Analysis Content */}
-              <ScrollView className="max-h-64 mb-4">
-                {analysisResults?.success ? (
-                  <>
-                    <Text className="text-sm font-semibold text-gray-700 mb-2">Pig ID: {analysisResults.pigId}</Text>
-                    <Text className="text-xs text-gray-500 mb-3">
-                      Execution time: {(analysisResults.executionTime / 1000).toFixed(2)}s
-                      {analysisResults.cacheHit ? ' (cached)' : ''}
-                    </Text>
-                    <Text className="text-sm text-gray-800 leading-5">
-                      {analysisResults.analysis}
-                    </Text>
-                  </>
-                ) : (
-                  <Text className="text-sm text-red-600">
-                    {analysisResults?.error || 'Analysis failed'}
-                  </Text>
-                )}
-              </ScrollView>
-
-              {/* Action Buttons */}
-              <View className="flex-row gap-3">
-                <TouchableOpacity 
-                  className="flex-1 py-2 rounded-lg border border-gray-300 items-center"
-                  onPress={() => setShowAnalysisResults(false)}
-                  activeOpacity={0.7}
-                >
-                  <Text className="text-gray-700 font-semibold text-sm">Close</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  className="flex-1 py-2 rounded-lg bg-blue-600 items-center"
-                  onPress={handleAnalyze}
-                  activeOpacity={0.8}
-                  disabled={isAnalyzing}
-                >
-                  <Text className="text-white font-semibold text-sm">
-                    {isAnalyzing ? 'Analyzing...' : 'Re-analyze'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
         {/* Bottom spacing for additional content */}
         <View className="h-24" />
       </ScrollView>
@@ -507,6 +446,36 @@ const Analyze = () => {
             >
               <Text className="text-white font-semibold text-sm">🔄 Refresh Stats</Text>
             </TouchableOpacity>
+
+            {/* Deterministic schema test trigger */}
+            <TouchableOpacity
+              className={`py-2 rounded-lg items-center mt-3 ${
+                isRunningDeterministicTests ? 'bg-gray-400' : 'bg-green-600'
+              }`}
+              onPress={handleRunDeterministicSchemaTests}
+              disabled={isRunningDeterministicTests}
+            >
+              <Text className="text-white font-semibold text-sm">
+                {isRunningDeterministicTests
+                  ? 'Running Deterministic Tests...'
+                  : '🧪 Run Deterministic Schema Tests'}
+              </Text>
+            </TouchableOpacity>
+
+            {deterministicTestResult && (
+              <View className="mt-3 p-3 rounded-lg bg-gray-100">
+                <Text
+                  className={`text-xs font-medium ${
+                    deterministicTestResult.startsWith('PASS') ? 'text-green-700' : 'text-red-700'
+                  }`}
+                >
+                  {deterministicTestResult}
+                </Text>
+                <Text className="text-[11px] text-gray-600 mt-1">
+                  Check Metro logs for detailed per-test output.
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </Modal>

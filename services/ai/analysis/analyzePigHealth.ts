@@ -182,7 +182,12 @@ export const analyzePigHealth = async (
       promptTemplate.systemRole,
       promptTemplate.userPrompt,
       ragContext,
-      apiKey
+      apiKey,
+      {
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.4,
+        maxTokens: 350,
+      }
     );
 
     if (!llmResponse.success) {
@@ -277,7 +282,12 @@ export const analyzePigHealthStream = async function* (
       promptTemplate.systemRole,
       promptTemplate.userPrompt,
       ragContext,
-      apiKey
+      apiKey,
+      {
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.4,
+        maxTokens: 350,
+      }
     )) {
       yield chunk;
     }

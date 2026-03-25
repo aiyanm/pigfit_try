@@ -166,29 +166,25 @@ export const testStatisticsCalculation = async (): Promise<boolean> => {
     // Parse out the statistics from context
     const hasStats = context.includes('AGGREGATE STATISTICS');
     const hasTemp = context.includes('Temperature: Avg');
-    const hasHR = context.includes('Heart Rate: Avg');
     const hasActivity = context.includes('Activity Level:');
     const hasTHI = context.includes('Temperature-Humidity Index');
     
     console.log('📊 Checking statistics:');
     console.log(`  ${hasTemp ? '✅' : '❌'} Temperature statistics`);
-    console.log(`  ${hasHR ? '✅' : '❌'} Heart rate statistics`);
     console.log(`  ${hasActivity ? '✅' : '❌'} Activity statistics`);
     console.log(`  ${hasTHI ? '✅' : '❌'} THI statistics`);
     
     // Extract and display actual values
     const tempMatch = context.match(/Temperature: Avg ([\d.]+)°C/);
-    const hrMatch = context.match(/Heart Rate: Avg (\d+) bpm/);
     const activityMatch = context.match(/Activity Level: ([\d.]+)/);
     const thiMatch = context.match(/Temperature-Humidity Index.*?: ([\d.]+)/);
     
     console.log('\n📈 Sample Values:');
     if (tempMatch) console.log(`  Temperature: ${tempMatch[1]}°C`);
-    if (hrMatch) console.log(`  Heart Rate: ${hrMatch[1]} bpm`);
     if (activityMatch) console.log(`  Activity: ${activityMatch[1]}`);
     if (thiMatch) console.log(`  THI: ${thiMatch[1]}`);
     
-    const allPresent = hasStats && hasTemp && hasHR && hasActivity && hasTHI;
+    const allPresent = hasStats && hasTemp && hasActivity && hasTHI;
     
     if (allPresent) {
       console.log('\n✅ All statistics calculated correctly');
