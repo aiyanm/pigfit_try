@@ -11,7 +11,11 @@ export type { SensorDataPoint, TrendPeriod };
 let currentDeviceId: string = 'PigFit_Device';
 let currentPigId: string = 'LIVE-PIG-01';
 const lastSeenHourByPig = new Map<string, number>();
+const lastPeriodRefreshAtByPig = new Map<string, number>();
+const periodRefreshInFlightByPig = new Set<string>();
 const HOUR_MS = 60 * 60 * 1000;
+const PERIOD_AGG_REFRESH_THROTTLE_MS = 20 * 1000;
+type PeriodRefreshSource = 'ingest' | 'timer';
 
 const toLocalDateString = (ms: number): string => {
   const d = new Date(ms);
@@ -163,6 +167,7 @@ export const logSensorData = async (
       lastSeenHourByPig.set(pigId, currentHourStart);
     }
 
+    triggerPeriodAggregateRefresh(pigId, 'ingest');
     console.log('✅ Sensor data stored in database');
     
   } catch (error) {
@@ -392,6 +397,46 @@ export const loadTrendData = async (
     console.error('❌ Error loading trend data:', error);
     return [];
   }
+};
+
+export const getCurrentIngestionPigId = (): string => currentPigId;
+
+/**
+ * Trigger period aggregate refresh with throttle + in-flight protection.
+ * Uses non-blocking execution to avoid slowing down BLE ingestion.
+ */
+export const triggerPeriodAggregateRefresh = (
+  pigId: string,
+  source: PeriodRefreshSource = 'ingest',
+  force: boolean = false
+): void => {
+  const now = Date.now();
+  const lastRun = lastPeriodRefreshAtByPig.get(pigId) ?? 0;
+
+  if (periodRefreshInFlightByPig.has(pigId)) {
+    console.log(`⏭️ Skipping period refresh (${source}) for ${pigId}: run already in-flight`);
+    return;
+  }
+
+  if (!force && now - lastRun < PERIOD_AGG_REFRESH_THROTTLE_MS) {
+    console.log(`⏭️ Skipping period refresh (${source}) for ${pigId}: throttled`);
+    return;
+  }
+
+  periodRefreshInFlightByPig.add(pigId);
+  lastPeriodRefreshAtByPig.set(pigId, now);
+
+  void (async () => {
+    try {
+      console.log(`🔄 Starting period refresh (${source}) for ${pigId}`);
+      await refreshAllPeriodAggregates(pigId);
+      console.log(`✅ Period refresh completed (${source}) for ${pigId}`);
+    } catch (error) {
+      console.error(`❌ Period refresh failed (${source}) for ${pigId}:`, error);
+    } finally {
+      periodRefreshInFlightByPig.delete(pigId);
+    }
+  })();
 };
 
 /**

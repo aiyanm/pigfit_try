@@ -9,7 +9,7 @@ import {
 
 import * as ExpoDevice from "expo-device";
 import base64 from "react-native-base64";
-import { initializeLogger, logSensorData } from "./services";
+import { getCurrentIngestionPigId, initializeLogger, logSensorData, triggerPeriodAggregateRefresh } from "./services";
 import {
   notifyBLEConnected,
   notifyBLEDisconnected,
@@ -19,6 +19,7 @@ import { dbService } from "./services/storage/db/client";
 const PIGFIT_DEVICE_NAME = "PigFit_Device";
 const PIGFIT_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 const PIGFIT_CHARACTERISTIC_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
+const PERIOD_AGG_REFRESH_BACKSTOP_MS = 30 * 1000;
 
 interface PigFitData {
   temp: number;
@@ -52,6 +53,7 @@ function useBLE(): BluetoothLowEnergyApi {
   const [isConnecting, setIsConnecting] = useState(false);
   const scanStateSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aggregateBackstopRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const disconnectionSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   const characteristicSubscriptionRef = useRef<{ remove: () => void } | null>(null);
 
@@ -461,8 +463,34 @@ function useBLE(): BluetoothLowEnergyApi {
   };
 
   useEffect(() => {
+    if (!connectedDevice) {
+      if (aggregateBackstopRef.current) {
+        clearInterval(aggregateBackstopRef.current);
+        aggregateBackstopRef.current = null;
+      }
+      return;
+    }
+
+    // Backstop refresh while connected in case packet-triggered refresh is delayed.
+    aggregateBackstopRef.current = setInterval(() => {
+      const pigId = getCurrentIngestionPigId();
+      triggerPeriodAggregateRefresh(pigId, 'timer');
+    }, PERIOD_AGG_REFRESH_BACKSTOP_MS);
+
+    return () => {
+      if (aggregateBackstopRef.current) {
+        clearInterval(aggregateBackstopRef.current);
+        aggregateBackstopRef.current = null;
+      }
+    };
+  }, [connectedDevice]);
+
+  useEffect(() => {
     return () => {
       stopScan();
+      if (aggregateBackstopRef.current) {
+        clearInterval(aggregateBackstopRef.current);
+      }
       if (characteristicSubscriptionRef.current) {
         characteristicSubscriptionRef.current.remove();
       }

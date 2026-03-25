@@ -37,6 +37,7 @@ interface CacheEntry {
 }
 const contextCache = new Map<string, CacheEntry>();
 const CACHE_DURATION_MS = 300000; // 5 minutes
+const CONTEXT_COMPLETION_HEADROOM_TOKENS = 450;
 
 /**
  * Estimate token count using simple heuristic
@@ -593,13 +594,16 @@ export const prepareRAGContext = async (
       console.log(`📈 Context token estimate: ${tokenCount}/${config.contextTokenLimit}`);
     }
 
-    if (tokenCount > (config.contextTokenLimit || 3500)) {
+    const configuredLimit = config.contextTokenLimit || 3500;
+    const effectiveContextLimit = Math.max(600, configuredLimit - CONTEXT_COMPLETION_HEADROOM_TOKENS);
+
+    if (tokenCount > effectiveContextLimit) {
       console.warn(
-        `⚠️ Context exceeds token limit (${tokenCount} > ${config.contextTokenLimit}), truncating...`
+        `⚠️ Context exceeds effective token limit (${tokenCount} > ${effectiveContextLimit}), truncating...`
       );
       formattedContext = truncateContextToTokenLimit(
         formattedContext,
-        config.contextTokenLimit || 3500
+        effectiveContextLimit
       );
 
       const newTokenCount = estimateContextTokens(formattedContext);

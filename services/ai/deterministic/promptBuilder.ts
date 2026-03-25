@@ -5,7 +5,7 @@ export const DETERMINISTIC_VERSIONS = {
   DAILY_SCHEMA: 'daily_assessment_v1',
   HOURLY_PROMPT: 'hourly_prompt_v1',
   DAILY_PROMPT: 'daily_prompt_v1',
-  MODEL: 'llama-3.1-8b-instant',
+  MODEL: 'provider-managed',
 } as const;
 
 export const buildHourlyPrompt = (aggregate: any): { system: string; user: string; context: string } => {

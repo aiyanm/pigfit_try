@@ -1,5 +1,4 @@
-import { getGroqApiKey } from '../../core/config';
-import { safeCallGroq } from '../providers/groqProvider';
+import type { AIProviderName } from '../../core/config';
 import { dbService } from '../../storage/db/client';
 import {
   buildDailyPrompt,
@@ -13,6 +12,7 @@ import {
   type DailyAssessmentV1,
   type HourlyInsightV1,
 } from './contracts';
+import { getDeterministicModelForProvider, getDeterministicProviderChain } from '../providers/providerFactory';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -25,24 +25,6 @@ const getLocalDateString = (ts: number): string => {
   return `${y}-${m}-${day}`;
 };
 
-const parseJsonFromModel = (raw: string): any | null => {
-  const trimmed = raw.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-};
-
 const hashString = (value: string): string => {
   let hash = 0;
   for (let i = 0; i < value.length; i++) {
@@ -52,17 +34,82 @@ const hashString = (value: string): string => {
   return `h${Math.abs(hash)}`;
 };
 
-const runDeterministicGroq = async (system: string, user: string, context: string): Promise<string> => {
-  const apiKey = getGroqApiKey();
-  const result = await safeCallGroq(system, user, context, apiKey, {
-    model: 'llama-3.1-8b-instant',
-    temperature: 0.1,
-    maxTokens: 220,
-  });
-  if (!result.success) {
-    throw new Error(result.error || 'Groq deterministic call failed');
+interface ProviderCallResult {
+  parsed: unknown | null;
+  provider: AIProviderName;
+  model: string;
+}
+
+const runDeterministicStructured = async (
+  system: string,
+  user: string,
+  context: string,
+  schemaName: string,
+  schema: Record<string, unknown>
+): Promise<ProviderCallResult> => {
+  const providers = getDeterministicProviderChain();
+  let lastError: Error | null = null;
+
+  for (const provider of providers) {
+    try {
+      const model = getDeterministicModelForProvider(provider.name);
+      const result = await provider.generateStructured({
+        system,
+        user,
+        context,
+        schemaName,
+        schema,
+        model,
+        temperature: 0.1,
+        maxTokens: 260,
+      });
+      return {
+        parsed: result.parsed,
+        provider: result.provider,
+        model: result.model,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Unknown provider error');
+      console.warn(`⚠️ Deterministic provider failed (${provider.name}): ${lastError.message}`);
+    }
   }
-  return result.content;
+
+  if (lastError) {
+    throw lastError;
+  }
+  throw new Error('No deterministic provider available');
+};
+
+const HOURLY_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    schema_version: { type: 'string', const: 'hourly_insight_v1' },
+    severity: { type: 'string', enum: ['normal', 'warning', 'critical'] },
+    summary: { type: 'string' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    key_signals: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['schema_version', 'severity', 'summary', 'confidence', 'key_signals'],
+};
+
+const DAILY_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    schema_version: { type: 'string', const: 'daily_assessment_v1' },
+    overall_status: { type: 'string', enum: ['normal', 'watch', 'critical'] },
+    summary: { type: 'string' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    key_observations: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['schema_version', 'overall_status', 'summary', 'confidence', 'key_observations'],
 };
 
 export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: number): Promise<void> => {
@@ -94,10 +141,18 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
   try {
     const { system, user, context } = buildHourlyPrompt(aggregate);
     let parsed: HourlyInsightV1 | null = null;
+    let providerModelVersion: string = DETERMINISTIC_VERSIONS.MODEL;
 
     try {
-      const modelText = await runDeterministicGroq(system, user, context);
-      parsed = parseHourlyInsightV1(parseJsonFromModel(modelText));
+      const modelResult = await runDeterministicStructured(
+        system,
+        user,
+        context,
+        DETERMINISTIC_VERSIONS.HOURLY_SCHEMA,
+        HOURLY_SCHEMA
+      );
+      parsed = parseHourlyInsightV1(modelResult.parsed);
+      providerModelVersion = `${modelResult.provider}:${modelResult.model}`;
     } catch {
       // fall through to local deterministic fallback
     }
@@ -120,7 +175,7 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       source_hourly_aggregate_id: aggregate.id ?? null,
       schema_version: DETERMINISTIC_VERSIONS.HOURLY_SCHEMA,
       prompt_version: DETERMINISTIC_VERSIONS.HOURLY_PROMPT,
-      model_version: DETERMINISTIC_VERSIONS.MODEL,
+      model_version: providerModelVersion,
       status: 'success',
       error_code: null,
       error_message: null,
@@ -179,10 +234,18 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
     const { system, user, context } = buildDailyPrompt(pigId, bucketDay, compactRows);
 
     let parsed: DailyAssessmentV1 | null = null;
+    let providerModelVersion: string = DETERMINISTIC_VERSIONS.MODEL;
 
     try {
-      const modelText = await runDeterministicGroq(system, user, context);
-      parsed = parseDailyAssessmentV1(parseJsonFromModel(modelText));
+      const modelResult = await runDeterministicStructured(
+        system,
+        user,
+        context,
+        DETERMINISTIC_VERSIONS.DAILY_SCHEMA,
+        DAILY_SCHEMA
+      );
+      parsed = parseDailyAssessmentV1(modelResult.parsed);
+      providerModelVersion = `${modelResult.provider}:${modelResult.model}`;
     } catch {
       // fallback to rule-based daily
     }
@@ -221,7 +284,7 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
       source_hash: sourceHash,
       schema_version: DETERMINISTIC_VERSIONS.DAILY_SCHEMA,
       prompt_version: DETERMINISTIC_VERSIONS.DAILY_PROMPT,
-      model_version: DETERMINISTIC_VERSIONS.MODEL,
+      model_version: providerModelVersion,
       status: 'success',
       error_code: null,
       error_message: null,

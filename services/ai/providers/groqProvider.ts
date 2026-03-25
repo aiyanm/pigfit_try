@@ -19,7 +19,16 @@ export interface LLMResponse {
   success: boolean;
   content: string;
   tokensUsed?: number;
+  promptTokens?: number;
+  completionTokens?: number;
   error?: string;
+}
+
+interface GroqCompletionResult {
+  content: string;
+  tokensUsed?: number;
+  promptTokens?: number;
+  completionTokens?: number;
 }
 
 export interface GroqCallOptions {
@@ -212,7 +221,7 @@ const callGroqAPI = async (
   context: string,
   apiKey: string,
   options?: GroqCallOptions
-): Promise<string> => {
+): Promise<GroqCompletionResult> => {
   const config = getRAGConfig();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -269,10 +278,17 @@ const callGroqAPI = async (
 
     const content = data.choices[0].message.content;
     const tokensUsed = data.usage?.total_tokens;
+    const promptTokens = data.usage?.prompt_tokens;
+    const completionTokens = data.usage?.completion_tokens;
 
     console.log(`✅ Groq response received (${tokensUsed} tokens used)`);
 
-    return content;
+    return {
+      content,
+      tokensUsed,
+      promptTokens,
+      completionTokens,
+    };
 
   } catch (error) {
     clearTimeout(timeoutId);
@@ -318,7 +334,10 @@ export const safeCallGroq = async (
 
     return {
       success: true,
-      content: result,
+      content: result.content,
+      tokensUsed: result.tokensUsed,
+      promptTokens: result.promptTokens,
+      completionTokens: result.completionTokens,
     };
 
   } catch (error) {
