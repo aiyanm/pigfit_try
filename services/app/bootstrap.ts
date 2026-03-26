@@ -4,6 +4,9 @@ import { logger } from '../core/logger';
 
 export const initializeAppServices = async (): Promise<void> => {
   await dbService.initialize();
-  initializeAIConfig();
+  initializeAIConfig({
+    deterministicPrimaryProvider: 'groq',
+    deterministicFallbackProviders: [],
+  });
   logger.info('Service bootstrap complete');
 };

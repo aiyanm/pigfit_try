@@ -1,6 +1,6 @@
 import { generateContextualInputs, classifyActivityState, calculateTHI, checkLethargy } from '../diagnostics/metricsService';
 import { dbService } from '../storage/db/client';
-import { runDailyAssessmentForDay, runHourlyInsightForBucket } from '../ai/deterministic/orchestrator';
+import { runHourlyInsightForBucket } from '../ai/deterministic/orchestrator';
 import { isDeterministicEnabled } from '../core/config';
 import type { SensorDataPoint, TrendPeriod } from '../core/types';
 
@@ -96,8 +96,8 @@ export const finalizeHourlyAggregateBucket = async (pigId: string, bucketStartMs
 const runDeterministicForClosedHour = async (pigId: string, closedHourStartMs: number): Promise<void> => {
   if (!isDeterministicEnabled()) return;
   try {
+    // Daily assessments are on-demand from the UI to reduce token usage during testing.
     await runHourlyInsightForBucket(pigId, closedHourStartMs);
-    await runDailyAssessmentForDay(pigId, toLocalDateString(closedHourStartMs));
   } catch (error) {
     console.error('❌ Error running deterministic pipeline for closed hour:', error);
   }

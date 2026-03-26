@@ -8,6 +8,7 @@ import {
   Dimensions,
   Modal,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import {
@@ -18,6 +19,7 @@ import {
   getDeterministicInsights,
   loadSensorData,
   loadTrendData,
+  runDailyAssessmentForDay,
 } from '../services';
 import { runDeterministicSchemaTests } from '../services/dev/tests/testDeterministicSchema';
 
@@ -25,6 +27,7 @@ const { width } = Dimensions.get('window');
 
 type PigId = 'LIVE-PIG-01' | 'LIVE-PIG-02' | 'LIVE-PIG-03';
 type TrendPeriod = '30m' | '1h' | '4h' | '12h';
+const MIN_HOURLY_INSIGHTS_FOR_DAILY = 8;
 
 // UI Configuration for each diagnostic case
 const CASE_UI_CONFIG: Record<string, {
@@ -56,6 +59,25 @@ const Analyze = () => {
     hourlyInsights: any[];
     dailyAssessment: any | null;
   } | null>(null);
+  const [isGeneratingDaily, setIsGeneratingDaily] = useState(false);
+
+  const successfulHourlyInsights = useMemo(() => {
+    const rows = deterministicData?.hourlyInsights ?? [];
+    return rows.filter((row: any) => row?.status === 'success').length;
+  }, [deterministicData]);
+
+  const toLocalDateString = (ms: number): string => {
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const refreshDeterministicInsights = async (pigId: PigId): Promise<void> => {
+    const data = await getDeterministicInsights(pigId);
+    setDeterministicData(data);
+  };
 
   // Load sensor data when period changes
   useEffect(() => {
@@ -135,6 +157,31 @@ const Analyze = () => {
       setDeterministicTestResult(`FAIL: ${message}`);
     } finally {
       setIsRunningDeterministicTests(false);
+    }
+  };
+
+  const handleGenerateDailyInsight = async () => {
+    if (isGeneratingDaily) return;
+
+    if (successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY) {
+      Alert.alert(
+        'Not enough hourly insights yet',
+        `You need at least ${MIN_HOURLY_INSIGHTS_FOR_DAILY} successful hourly insights before generating a daily assessment.`
+      );
+      return;
+    }
+
+    setIsGeneratingDaily(true);
+    try {
+      const targetDay = deterministicData?.bucketDay || toLocalDateString(Date.now());
+      await runDailyAssessmentForDay(selectedPig, targetDay);
+      await refreshDeterministicInsights(selectedPig);
+      Alert.alert('Daily insight generated', `Daily assessment has been updated for ${targetDay}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      Alert.alert('Failed to generate daily insight', message);
+    } finally {
+      setIsGeneratingDaily(false);
     }
   };
 
@@ -226,7 +273,7 @@ const Analyze = () => {
             Day: {deterministicData?.bucketDay || '--'}
           </Text>
           <Text className="text-xs text-gray-700 mb-1">
-            Hourly insights: {deterministicData?.hourlyInsights?.length ?? 0}
+            Hourly insights: {deterministicData?.hourlyInsights?.length ?? 0} (successful: {successfulHourlyInsights})
           </Text>
           <Text className="text-xs text-gray-700 mb-1">
             Latest hourly: {deterministicData?.hourlyInsights?.length
@@ -236,6 +283,28 @@ const Analyze = () => {
           <Text className="text-xs text-gray-700">
             Daily: {deterministicData?.dailyAssessment?.summary || 'No daily assessment yet'}
           </Text>
+          <TouchableOpacity
+            className={`mt-3 rounded-lg px-3 py-2 ${
+              isGeneratingDaily || successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
+                ? 'bg-gray-300'
+                : 'bg-blue-600'
+            }`}
+            onPress={handleGenerateDailyInsight}
+            disabled={isGeneratingDaily || successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY}
+          >
+            <View className="flex-row items-center justify-center">
+              {isGeneratingDaily ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : null}
+              <Text className={`text-center text-xs font-semibold ${isGeneratingDaily ? 'ml-2 text-white' : 'text-white'}`}>
+                {isGeneratingDaily
+                  ? 'Generating daily insight...'
+                  : successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
+                    ? `Need ${MIN_HOURLY_INSIGHTS_FOR_DAILY}+ successful hourly insights`
+                    : 'Generate Daily Insight'}
+              </Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Trends Section */}
