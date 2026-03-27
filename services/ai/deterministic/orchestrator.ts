@@ -1,6 +1,12 @@
 import type { AIProviderName } from '../../core/config';
 import { dbService } from '../../storage/db/client';
 import {
+  evaluateDiagnosticHierarchy,
+  evaluateDiagnosticHierarchyFromHourlyAggregate,
+  type DiagnosticResult,
+} from '../../diagnostics/decisionTreeService';
+import type { SensorDataPoint } from '../../core/types';
+import {
   buildDailyPrompt,
   buildFallbackHourlyInsight,
   buildHourlyPrompt,
@@ -33,6 +39,45 @@ const hashString = (value: string): string => {
   }
   return `h${Math.abs(hash)}`;
 };
+
+const severityRank: Record<'normal' | 'warning' | 'critical', number> = {
+  normal: 0,
+  warning: 1,
+  critical: 2,
+};
+
+const mapRuleSeverity = (result: DiagnosticResult): 'normal' | 'warning' | 'critical' => {
+  if (result.severity === 'alert') return 'critical';
+  if (result.severity === 'warning') return 'warning';
+  return 'normal';
+};
+
+const maxSeverity = (
+  a: 'normal' | 'warning' | 'critical',
+  b: 'normal' | 'warning' | 'critical'
+): 'normal' | 'warning' | 'critical' => (severityRank[a] >= severityRank[b] ? a : b);
+
+const statusRank: Record<'normal' | 'watch' | 'critical', number> = {
+  normal: 0,
+  watch: 1,
+  critical: 2,
+};
+
+const maxOverallStatus = (
+  a: 'normal' | 'watch' | 'critical',
+  b: 'normal' | 'watch' | 'critical'
+): 'normal' | 'watch' | 'critical' => (statusRank[a] >= statusRank[b] ? a : b);
+
+const toSensorDataPoints = (rows: any[]): SensorDataPoint[] =>
+  rows.map((row: any) => ({
+    timestamp: Number(row.timestamp ?? Date.now()),
+    temp: Number(row.temp ?? 0),
+    envTemp: Number(row.env_temp ?? 0),
+    humidity: Number(row.humidity ?? 0),
+    activityIntensity: Number(row.activity_intensity ?? 0),
+    pitchAngle: Number(row.pitch_angle ?? 0),
+    feed: Number(row.feed ?? 0),
+  }));
 
 interface ProviderCallResult {
   parsed: unknown | null;
@@ -120,6 +165,15 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
 
   if (!aggregate) return;
 
+  const bucketEndMs = bucketStartMs + HOUR_MS - 1;
+  const rawRows = await dbService.getSensorData(bucketStartMs, bucketEndMs, pigId);
+  const rawPoints = toSensorDataPoints(rawRows);
+  const ruleResult =
+    rawPoints.length > 0
+      ? evaluateDiagnosticHierarchy(rawPoints)
+      : evaluateDiagnosticHierarchyFromHourlyAggregate(aggregate);
+  const ruleSeverity = mapRuleSeverity(ruleResult);
+
   const sourceHash = hashString(
     JSON.stringify({
       pig_id: pigId,
@@ -135,11 +189,18 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       thi: aggregate.thi ?? null,
       lethargy_alert: aggregate.lethargy_alert ?? 0,
       dominant_activity_state: aggregate.dominant_activity_state ?? 'Resting',
+      rule_case: ruleResult.case,
+      rule_severity: ruleSeverity,
     })
   );
 
   try {
-    const { system, user, context } = buildHourlyPrompt(aggregate);
+    const { system, user, context } = buildHourlyPrompt(aggregate, {
+      case: ruleResult.case,
+      severity: ruleSeverity,
+      title: ruleResult.title,
+      description: ruleResult.description,
+    });
     let parsed: HourlyInsightV1 | null = null;
     let providerModelVersion: string = DETERMINISTIC_VERSIONS.MODEL;
 
@@ -161,22 +222,32 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       parsed = buildFallbackHourlyInsight(aggregate);
     }
 
+    const resolvedSeverity = maxSeverity(ruleSeverity, parsed.severity);
+
     await dbService.upsertHourlyInsight({
       pig_id: pigId,
       bucket_start: bucketStartMs,
       bucket_end: bucketStartMs + HOUR_MS - 1,
       bucket_date: bucketDate,
       bucket_hour: bucketHour,
-      severity: parsed.severity,
+      severity: resolvedSeverity,
       summary: parsed.summary,
       confidence: parsed.confidence,
-      insight_json: JSON.stringify(parsed),
+      insight_json: JSON.stringify({
+        ...parsed,
+        severity: resolvedSeverity,
+        rule_case: ruleResult.case,
+        rule_severity: ruleSeverity,
+      }),
       source_hash: sourceHash,
       source_hourly_aggregate_id: aggregate.id ?? null,
       schema_version: DETERMINISTIC_VERSIONS.HOURLY_SCHEMA,
       prompt_version: DETERMINISTIC_VERSIONS.HOURLY_PROMPT,
       model_version: providerModelVersion,
       status: 'success',
+      rule_case: ruleResult.case,
+      rule_severity: ruleSeverity,
+      rule_reasoning_json: JSON.stringify(ruleResult.reasoning),
       error_code: null,
       error_message: null,
     });
@@ -198,6 +269,9 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       prompt_version: DETERMINISTIC_VERSIONS.HOURLY_PROMPT,
       model_version: DETERMINISTIC_VERSIONS.MODEL,
       status: 'failed',
+      rule_case: ruleResult.case,
+      rule_severity: ruleSeverity,
+      rule_reasoning_json: JSON.stringify(ruleResult.reasoning),
       error_code: 'HOURLY_PIPELINE_ERROR',
       error_message: errorMsg,
     });
@@ -207,6 +281,11 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
 export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string): Promise<void> => {
   const hourlyRows = await dbService.getHourlyInsightsByDate(pigId, bucketDay);
   const successful = hourlyRows.filter((row: any) => row.status === 'success');
+  const ruleSeverities = successful.map((r: any) => r.rule_severity ?? r.severity);
+  const ruleCriticalCount = ruleSeverities.filter((s: string) => s === 'critical').length;
+  const ruleWarningCount = ruleSeverities.filter((s: string) => s === 'warning').length;
+  const baselineOverallStatus: 'normal' | 'watch' | 'critical' =
+    ruleCriticalCount > 0 ? 'critical' : ruleWarningCount > 0 ? 'watch' : 'normal';
 
   if (successful.length === 0) return;
 
@@ -216,6 +295,7 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
         id: row.id,
         hour: row.bucket_hour,
         severity: row.severity,
+        rule_severity: row.rule_severity ?? row.severity,
         summary: row.summary,
       }))
     )
@@ -228,6 +308,7 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
     const compactRows = successful.map((row: any) => ({
       bucket_hour: row.bucket_hour,
       severity: row.severity,
+      rule_severity: row.rule_severity ?? row.severity,
       summary: row.summary,
       confidence: row.confidence ?? 0.5,
     }));
@@ -251,9 +332,7 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
     }
 
     if (!parsed) {
-      const criticalCount = successful.filter((r: any) => r.severity === 'critical').length;
-      const warningCount = successful.filter((r: any) => r.severity === 'warning').length;
-      const overall_status = criticalCount > 0 ? 'critical' : warningCount > 0 ? 'watch' : 'normal';
+      const overall_status = baselineOverallStatus;
       parsed = {
         schema_version: 'daily_assessment_v1',
         overall_status,
@@ -266,11 +345,16 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
         confidence: 0.76,
         key_observations: [
           `success_hours=${successful.length}`,
-          `critical_hours=${criticalCount}`,
-          `warning_hours=${warningCount}`,
+          `rule_critical_hours=${ruleCriticalCount}`,
+          `rule_warning_hours=${ruleWarningCount}`,
         ],
       };
     }
+
+    parsed = {
+      ...parsed,
+      overall_status: maxOverallStatus(parsed.overall_status, baselineOverallStatus),
+    };
 
     await dbService.upsertDailyAssessment({
       pig_id: pigId,

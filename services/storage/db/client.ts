@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const DB_SCHEMA_VERSION = 2;
+const DB_SCHEMA_VERSION = 3;
 
 interface SensorData {
   timestamp: number;
@@ -68,6 +68,9 @@ interface HourlyInsight {
   prompt_version: string;
   model_version: string;
   status: 'success' | 'failed';
+  rule_case?: string | null;
+  rule_severity?: 'normal' | 'warning' | 'critical' | null;
+  rule_reasoning_json?: string | null;
   error_code?: string | null;
   error_message?: string | null;
 }
@@ -391,6 +394,9 @@ class DatabaseService {
           prompt_version TEXT NOT NULL,
           model_version TEXT NOT NULL,
           status TEXT NOT NULL,
+          rule_case TEXT,
+          rule_severity TEXT,
+          rule_reasoning_json TEXT,
           error_code TEXT,
           error_message TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -455,6 +461,21 @@ class DatabaseService {
       try {
         await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN sample_count INTEGER DEFAULT 0`);
         console.log('✅ Added sample_count column to hourly_aggregates');
+      } catch { /* column already exists */ }
+
+      try {
+        await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_case TEXT`);
+        console.log('✅ Added rule_case column to hourly_insights');
+      } catch { /* column already exists */ }
+
+      try {
+        await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_severity TEXT`);
+        console.log('✅ Added rule_severity column to hourly_insights');
+      } catch { /* column already exists */ }
+
+      try {
+        await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_reasoning_json TEXT`);
+        console.log('✅ Added rule_reasoning_json column to hourly_insights');
       } catch { /* column already exists */ }
 
       console.log('✅ All tables created successfully');
@@ -688,8 +709,9 @@ class DatabaseService {
           severity, summary, confidence, insight_json,
           source_hash, source_hourly_aggregate_id,
           schema_version, prompt_version, model_version, status,
+          rule_case, rule_severity, rule_reasoning_json,
           error_code, error_message)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(pig_id, bucket_start, prompt_version) DO UPDATE SET
            bucket_end = excluded.bucket_end,
            bucket_date = excluded.bucket_date,
@@ -703,6 +725,9 @@ class DatabaseService {
            schema_version = excluded.schema_version,
            model_version = excluded.model_version,
            status = excluded.status,
+           rule_case = excluded.rule_case,
+           rule_severity = excluded.rule_severity,
+           rule_reasoning_json = excluded.rule_reasoning_json,
            error_code = excluded.error_code,
            error_message = excluded.error_message,
            updated_at = CURRENT_TIMESTAMP`,
@@ -722,6 +747,9 @@ class DatabaseService {
           data.prompt_version,
           data.model_version,
           data.status,
+          data.rule_case ?? null,
+          data.rule_severity ?? null,
+          data.rule_reasoning_json ?? null,
           data.error_code ?? null,
           data.error_message ?? null,
         ]

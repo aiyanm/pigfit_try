@@ -31,6 +31,15 @@ export interface DiagnosticResult {
   reasoning: DiagnosticReasoning;
 }
 
+export interface HourlyAggregateFusionInput {
+  mean_temp: number;
+  mean_env_temp: number;
+  mean_humidity: number;
+  mean_activity: number;
+  mean_pitch: number;
+  mean_feed?: number;
+}
+
 export const DIAGNOSTIC_THRESHOLDS = {
   FEVER_THRESHOLD: 39.5,
   NORMAL_TEMP_MIN: 38.0,
@@ -116,6 +125,26 @@ export const evaluateDiagnosticHierarchy = (
   }
 
   return createNormalDiagnostic();
+};
+
+/**
+ * Evaluate diagnostic hierarchy from a single hourly aggregate row.
+ * This maps aggregate means into a synthetic data point so the same tree
+ * logic is reused for hourly fusion labels.
+ */
+export const evaluateDiagnosticHierarchyFromHourlyAggregate = (
+  aggregate: HourlyAggregateFusionInput
+): DiagnosticResult => {
+  const synthetic: SensorDataPoint = {
+    timestamp: Date.now(),
+    temp: Number(aggregate.mean_temp ?? 0),
+    envTemp: Number(aggregate.mean_env_temp ?? 0),
+    humidity: Number(aggregate.mean_humidity ?? 0),
+    activityIntensity: Number(aggregate.mean_activity ?? 0),
+    pitchAngle: Number(aggregate.mean_pitch ?? 0),
+    feed: Number(aggregate.mean_feed ?? 0),
+  };
+  return evaluateDiagnosticHierarchy([synthetic]);
 };
 
 function createCaseADiagnostic(temp: number, activity: number, thi: number, reasoning: DiagnosticReasoning): DiagnosticResult {

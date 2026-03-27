@@ -1,5 +1,12 @@
 import type { HourlyInsightV1 } from './contracts';
 
+interface HourlyRuleContext {
+  case: string;
+  severity: 'normal' | 'warning' | 'critical';
+  title: string;
+  description: string;
+}
+
 export const DETERMINISTIC_VERSIONS = {
   HOURLY_SCHEMA: 'hourly_insight_v1',
   DAILY_SCHEMA: 'daily_assessment_v1',
@@ -8,7 +15,10 @@ export const DETERMINISTIC_VERSIONS = {
   MODEL: 'provider-managed',
 } as const;
 
-export const buildHourlyPrompt = (aggregate: any): { system: string; user: string; context: string } => {
+export const buildHourlyPrompt = (
+  aggregate: any,
+  rule: HourlyRuleContext
+): { system: string; user: string; context: string } => {
   const system = [
     'You are a deterministic farm analytics engine.',
     'Return JSON only, no markdown.',
@@ -46,7 +56,9 @@ export const buildHourlyPrompt = (aggregate: any): { system: string; user: strin
       'critical if extreme heat stress or severe lethargy signals',
       'warning if mild/moderate anomalies',
       'normal if stable ranges',
+      'Never downgrade below rule.severity. You may escalate if aggregate evidence strongly supports higher severity.',
     ],
+    rule,
   });
 
   return { system, user, context };
@@ -55,7 +67,13 @@ export const buildHourlyPrompt = (aggregate: any): { system: string; user: strin
 export const buildDailyPrompt = (
   pigId: string,
   bucketDay: string,
-  hourlyInsights: Array<{ bucket_hour: number; severity: string; summary: string; confidence: number }>
+  hourlyInsights: Array<{
+    bucket_hour: number;
+    severity: string;
+    rule_severity: string;
+    summary: string;
+    confidence: number;
+  }>
 ): { system: string; user: string; context: string } => {
   const system = [
     'You are a deterministic farm analytics engine.',
@@ -76,7 +94,7 @@ export const buildDailyPrompt = (
     pig_id: pigId,
     bucket_day: bucketDay,
     hourly_insights: hourlyInsights,
-    aggregation_rule: 'Daily assessment summarizes same-day hourly insights only.',
+    aggregation_rule: 'Daily assessment prioritizes rule_severity as primary signal; severity/summary are secondary narrative cues.',
   });
 
   return { system, user, context };
