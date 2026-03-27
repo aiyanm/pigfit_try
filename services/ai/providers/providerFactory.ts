@@ -1,4 +1,10 @@
-import { getAIConfig, type AIProviderName } from '../../core/config';
+import {
+  getAIConfig,
+  hasGeminiApiKey,
+  hasGroqApiKey,
+  hasOpenAIApiKey,
+  type AIProviderName,
+} from '../../core/config';
 import type { DeterministicLLMProvider } from './contracts';
 import { OpenAIDeterministicProvider } from './openaiDeterministicProvider';
 import { GroqDeterministicProvider } from './groqDeterministicProvider';
@@ -26,12 +32,23 @@ const uniqueProviders = (names: AIProviderName[]): AIProviderName[] => {
   });
 };
 
-export const getDeterministicProviderChain = (): DeterministicLLMProvider[] => {
+const isProviderAvailable = (provider: AIProviderName): boolean => {
+  if (provider === 'openai') return hasOpenAIApiKey();
+  if (provider === 'groq') return hasGroqApiKey();
+  return hasGeminiApiKey();
+};
+
+export const getDeterministicProviderOrder = (): AIProviderName[] => {
   const config = getAIConfig();
   const chain = uniqueProviders([
     config.deterministicPrimaryProvider,
     ...(config.deterministicFallbackProviders || []),
   ]);
+  return chain.filter(isProviderAvailable);
+};
+
+export const getDeterministicProviderChain = (): DeterministicLLMProvider[] => {
+  const chain = getDeterministicProviderOrder();
   return chain.map((name) => createProvider(name));
 };
 

@@ -133,6 +133,10 @@ export const isConfigured = (): boolean => {
   return !!(currentConfig.openaiApiKey || currentConfig.groqApiKey || currentConfig.geminiApiKey);
 };
 
+export const hasOpenAIApiKey = (): boolean => !!currentConfig.openaiApiKey;
+export const hasGroqApiKey = (): boolean => !!currentConfig.groqApiKey;
+export const hasGeminiApiKey = (): boolean => !!currentConfig.geminiApiKey;
+
 export const isDeterministicEnabled = (): boolean => {
   return currentConfig.deterministicEnabled !== false;
 };
