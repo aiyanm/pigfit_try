@@ -31,7 +31,7 @@ export const testAggregation = async () => {
         humidity: 65 + Math.random() * 5,
         activityIntensity: Math.random() * 10,
         pitchAngle: (Math.random() - 0.5) * 90,
-        feed: 3.0 + Math.random() * 0.5,
+        feedingPostureDetected: Math.random() > 0.5,
       };
 
       await logSensorData(testData, 'PigFit_Device', 'TEST-PIG-01');

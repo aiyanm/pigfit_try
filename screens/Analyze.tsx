@@ -12,10 +12,9 @@ import {
 } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import {
-  DiagnosticResult,
   SensorDataPoint,
-  evaluateDiagnosticHierarchy,
   backfillDeterministicInsightsV2,
+  getCurrentHourlyAnalytics,
   getDatabaseStats,
   getDeterministicInsights,
   loadSensorData,
@@ -126,6 +125,7 @@ const Analyze = () => {
   const [sensorData, setSensorData] = useState<SensorDataPoint[]>([]);
   const [trendData, setTrendData] = useState<SensorDataPoint[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [hourlyAnalytics, setHourlyAnalytics] = useState<any | null>(null);
 
   // Debug panel state
   const [showDebugPanel, setShowDebugPanel] = useState(false);
@@ -206,8 +206,12 @@ const Analyze = () => {
   };
 
   const refreshDeterministicInsights = async (pigId: PigId): Promise<void> => {
-    const data = await getDeterministicInsights(pigId);
-    setDeterministicData(data);
+    const [insights, analytics] = await Promise.all([
+      getDeterministicInsights(pigId),
+      getCurrentHourlyAnalytics(pigId),
+    ]);
+    setDeterministicData(insights);
+    setHourlyAnalytics(analytics);
   };
 
   // Load sensor data when period changes
@@ -230,6 +234,7 @@ const Analyze = () => {
         ]);
         setSensorData(rawData);
         setTrendData(aggregatedTrendData);
+        setHourlyAnalytics(await getCurrentHourlyAnalytics(selectedPig));
         console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${selectedPig} (${selectedPeriod})`);
       } catch (error) {
         console.error('Error loading sensor data:', error);
@@ -247,7 +252,9 @@ const Analyze = () => {
     const loadDeterministic = async () => {
       try {
         const data = await getDeterministicInsights(selectedPig);
+        const analytics = await getCurrentHourlyAnalytics(selectedPig);
         if (active) setDeterministicData(data);
+        if (active) setHourlyAnalytics(analytics);
       } catch (error) {
         console.error('Error loading deterministic insights:', error);
       }
@@ -260,13 +267,54 @@ const Analyze = () => {
     };
   }, [selectedPig]);
 
-  // Evaluate diagnostic hierarchy based on current sensor data
-  const diagnosticResult = useMemo((): DiagnosticResult => {
-    if (sensorData.length === 0) return evaluateDiagnosticHierarchy([]);
-    const result = evaluateDiagnosticHierarchy(sensorData);
-    if (result.case !== 'normal') console.log(`📋 Case ${result.case}: ${result.title}`);
-    return result;
-  }, [sensorData]);
+  const analyticsAlert = useMemo(() => {
+    if (!hourlyAnalytics) {
+      return {
+        status: 'Normal',
+        title: 'No analytics summary yet',
+        description: 'Waiting for enough tagged observations to compute the current analytics hour.',
+        color: 'bg-green-100',
+        text: 'text-green-700',
+        symbol: '✓',
+      };
+    }
+
+    const severeHeat = Number(hourlyAnalytics.severe_heat_event_count ?? 0);
+    const fever = Number(hourlyAnalytics.fever_event_count ?? 0);
+    const heat = Number(hourlyAnalytics.heat_stress_event_count ?? 0);
+    const lethargy = Number(hourlyAnalytics.lethargy_alert ?? 0);
+
+    if (severeHeat > 0 || (fever > 0 && heat > 0)) {
+      return {
+        status: 'Critical',
+        title: 'High-risk analytics hour',
+        description: `Peak THI ${Number(hourlyAnalytics.max_thi ?? hourlyAnalytics.thi ?? 0).toFixed(1)} with ${severeHeat} severe heat events and ${fever} fever events.`,
+        color: 'bg-red-100',
+        text: 'text-red-700',
+        symbol: '!',
+      };
+    }
+
+    if (fever > 0 || heat > 0 || lethargy > 0) {
+      return {
+        status: 'Warning',
+        title: 'Stress indicators need monitoring',
+        description: `${fever} fever events, ${heat} heat stress events, and ${Number(hourlyAnalytics.true_eating_event_count ?? 0)} true eating events in the latest hour.`,
+        color: 'bg-yellow-100',
+        text: 'text-yellow-700',
+        symbol: '●',
+      };
+    }
+
+    return {
+      status: 'Normal',
+      title: 'Stable analytics hour',
+      description: `No fever or heat-stress events in the latest hour. Feeding adherence ${(Number(hourlyAnalytics.feeding_schedule_adherence ?? 0) * 100).toFixed(0)}%.`,
+      color: 'bg-green-100',
+      text: 'text-green-700',
+      symbol: '✓',
+    };
+  }, [hourlyAnalytics]);
 
   // Check database stats for debug panel
   const checkDatabaseStats = async () => {
@@ -452,7 +500,7 @@ const Analyze = () => {
         </TouchableOpacity>
         <Text className="text-lg font-semibold text-gray-800">Analyze</Text>
         <TouchableOpacity onPress={() => { setShowDebugPanel(true); checkDatabaseStats(); }}>
-          <Text className="text-2xl text-gray-600">🔍</Text>
+          <Text className="text-sm font-semibold text-blue-700">Admin</Text>
         </TouchableOpacity>
       </View>
 
@@ -712,15 +760,15 @@ const Analyze = () => {
               </View>
             ) : (
               <View className="flex-row items-start gap-3">
-                <View className={`w-6 h-6 rounded-full ${CASE_UI_CONFIG[diagnosticResult.case].iconBg} items-center justify-center mt-0.5`}>
-                  <Text className={`${CASE_UI_CONFIG[diagnosticResult.case].iconText} font-bold text-xs`}>{CASE_UI_CONFIG[diagnosticResult.case].symbol}</Text>
+                <View className={`w-6 h-6 rounded-full ${analyticsAlert.color} items-center justify-center mt-0.5`}>
+                  <Text className={`${analyticsAlert.text} font-bold text-xs`}>{analyticsAlert.symbol}</Text>
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-semibold text-gray-900 mb-0.5">{diagnosticResult.title}</Text>
-                  <Text className="text-xs text-gray-500 mb-2">{diagnosticResult.description}</Text>
+                  <Text className="text-sm font-semibold text-gray-900 mb-0.5">{analyticsAlert.title}</Text>
+                  <Text className="text-xs text-gray-500 mb-2">{analyticsAlert.description}</Text>
                 </View>
-                <View className={`px-3 py-1 rounded-full ${CASE_UI_CONFIG[diagnosticResult.case].badgeBg}`}>
-                  <Text className={`text-xs font-medium ${CASE_UI_CONFIG[diagnosticResult.case].badgeText}`}>{CASE_UI_CONFIG[diagnosticResult.case].label}</Text>
+                <View className={`px-3 py-1 rounded-full ${analyticsAlert.color}`}>
+                  <Text className={`text-xs font-medium ${analyticsAlert.text}`}>{analyticsAlert.status}</Text>
                 </View>
               </View>
             )}
@@ -731,7 +779,7 @@ const Analyze = () => {
         <View className="h-24" />
       </ScrollView>
 
-      {/* Database Debug Panel Modal */}
+      {/* Admin Tools Modal */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -742,7 +790,7 @@ const Analyze = () => {
           <View className="bg-white rounded-t-2xl p-4 max-h-96">
             {/* Header */}
             <View className="flex-row justify-between items-center mb-4">
-              <Text className="text-lg font-bold text-gray-900">Database Debug</Text>
+              <Text className="text-lg font-bold text-gray-900">Admin Tools</Text>
               <TouchableOpacity onPress={() => setShowDebugPanel(false)}>
                 <Text className="text-2xl text-gray-600">✕</Text>
               </TouchableOpacity>

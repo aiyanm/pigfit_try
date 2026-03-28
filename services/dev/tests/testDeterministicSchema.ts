@@ -44,7 +44,6 @@ export const testHourlyAggregateSampleCount = async () => {
     mean_humidity: 68.2,
     mean_activity: 1.4,
     mean_pitch: 22.4,
-    mean_feed: 0.41,
     sample_count: 12,
     thi: 79.4,
     lethargy_alert: 0,
@@ -179,9 +178,9 @@ export const testHourCloseFinalization = async () => {
 
   // Insert deterministic raw points in a closed hour
   const points = [
-    { temp: 38.4, env: 28.0, hum: 65, act: 1.1, pitch: 20.0, feed: 0.2 },
-    { temp: 38.6, env: 28.2, hum: 66, act: 1.2, pitch: 21.0, feed: 0.3 },
-    { temp: 38.8, env: 28.4, hum: 67, act: 1.3, pitch: 22.0, feed: 0.4 },
+    { temp: 38.4, env: 28.0, hum: 65, act: 1.1, pitch: 20.0, feedingPostureDetected: true },
+    { temp: 38.6, env: 28.2, hum: 66, act: 1.2, pitch: 21.0, feedingPostureDetected: true },
+    { temp: 38.8, env: 28.4, hum: 67, act: 1.3, pitch: 22.0, feedingPostureDetected: false },
   ];
 
   for (let i = 0; i < points.length; i++) {
@@ -194,7 +193,7 @@ export const testHourCloseFinalization = async () => {
       activity_intensity: p.act,
       activity_state: 'Resting',
       pitch_angle: p.pitch,
-      feed: p.feed,
+      feeding_posture_detected: p.feedingPostureDetected ? 1 : 0,
       env_temp: p.env,
       humidity: p.hum,
     });

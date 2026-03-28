@@ -1,21 +1,40 @@
-import { generateContextualInputs, classifyActivityState, calculateTHI, checkLethargy } from '../diagnostics/metricsService';
+import {
+  DEFAULT_FEEDING_SCHEDULE,
+  calculateTHI,
+  classifyActivityState,
+  tagSensorDataPoint,
+} from '../diagnostics/metricsService';
 import { dbService } from '../storage/db/client';
-import { runHourlyInsightForBucket } from '../ai/deterministic/orchestrator';
-import { isDeterministicEnabled } from '../core/config';
-import type { SensorDataPoint, TrendPeriod } from '../core/types';
+import type {
+  FeedingSchedule,
+  HourlyAnalyticsSummary,
+  SensorDataPoint,
+  TrendPeriod,
+} from '../core/types';
 
-// Re-export shared domain types for backward compatibility with legacy imports.
 export type { SensorDataPoint, TrendPeriod };
 
-// Current device and pig IDs
-let currentDeviceId: string = 'PigFit_Device';
-let currentPigId: string = 'LIVE-PIG-01';
+let currentPigId = 'LIVE-PIG-01';
 const lastSeenHourByPig = new Map<string, number>();
 const lastPeriodRefreshAtByPig = new Map<string, number>();
 const periodRefreshInFlightByPig = new Set<string>();
 const HOUR_MS = 60 * 60 * 1000;
 const PERIOD_AGG_REFRESH_THROTTLE_MS = 20 * 1000;
 type PeriodRefreshSource = 'ingest' | 'timer';
+
+const PERIOD_DURATION_MS: Record<TrendPeriod, number> = {
+  '30m': 30 * 60 * 1000,
+  '1h': 1 * 60 * 60 * 1000,
+  '4h': 4 * 60 * 60 * 1000,
+  '12h': 12 * 60 * 60 * 1000,
+};
+
+const PERIOD_BUCKET_MS: Record<TrendPeriod, number> = {
+  '30m': 5 * 60 * 1000,
+  '1h': 10 * 60 * 1000,
+  '4h': 30 * 60 * 1000,
+  '12h': 60 * 60 * 1000,
+};
 
 const toLocalDateString = (ms: number): string => {
   const d = new Date(ms);
@@ -31,284 +50,278 @@ const getHourStartMs = (ts: number): number => {
   return d.getTime();
 };
 
-const buildHourlyAggregateFromRows = (pigId: string, bucketStartMs: number, rawRows: any[]) => {
-  if (rawRows.length === 0) return null;
+const getFeedingScheduleForPig = async (pigId: string): Promise<FeedingSchedule> => {
+  const stored = await dbService.getFeedingSchedule(pigId);
+  if (stored) {
+    return {
+      pigId,
+      feedingsPerDay: Number(stored.feedings_per_day ?? DEFAULT_FEEDING_SCHEDULE.feedingsPerDay),
+      feedingTimes: JSON.parse(String(stored.feeding_times ?? '[]')),
+      feedingWindowBeforeMinutes: Number(
+        stored.feeding_window_before_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes
+      ),
+      feedingWindowAfterMinutes: Number(
+        stored.feeding_window_after_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes
+      ),
+    };
+  }
 
-  const sums = rawRows.reduce(
-    (acc: any, row: any) => ({
-      temp: acc.temp + (row.temp ?? 0),
-      envTemp: acc.envTemp + (row.env_temp ?? 0),
-      humidity: acc.humidity + (row.humidity ?? 0),
-      activity: acc.activity + (row.activity_intensity ?? 0),
-      pitch: acc.pitch + (row.pitch_angle ?? 0),
-      feed: acc.feed + (row.feed ?? 0),
-    }),
-    { temp: 0, envTemp: 0, humidity: 0, activity: 0, pitch: 0, feed: 0 }
-  );
-
-  const n = rawRows.length;
-  const meanTemp = sums.temp / n;
-  const meanEnvTemp = sums.envTemp / n;
-  const meanHumidity = sums.humidity / n;
-  const meanActivity = sums.activity / n;
-  const meanPitch = sums.pitch / n;
-  const meanFeed = sums.feed / n;
-  const hour = new Date(bucketStartMs).getHours();
+  await dbService.upsertFeedingSchedule({
+    pig_id: pigId,
+    feedings_per_day: DEFAULT_FEEDING_SCHEDULE.feedingsPerDay,
+    feeding_times: JSON.stringify(DEFAULT_FEEDING_SCHEDULE.feedingTimes),
+    feeding_window_before_minutes: DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes,
+    feeding_window_after_minutes: DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes,
+  });
 
   return {
-    date: toLocalDateString(bucketStartMs),
-    hour,
-    pig_id: pigId,
-    mean_temp: Math.round(meanTemp * 100) / 100,
-    mean_env_temp: Math.round(meanEnvTemp * 100) / 100,
-    mean_humidity: Math.round(meanHumidity * 100) / 100,
-    mean_activity: Math.round(meanActivity * 100) / 100,
-    mean_pitch: Math.round(meanPitch * 100) / 100,
-    mean_feed: Math.round(meanFeed * 100) / 100,
-    sample_count: n,
-    thi: Math.round(calculateTHI(meanEnvTemp, meanHumidity) * 10) / 10,
-    lethargy_alert: checkLethargy(meanActivity, hour) ? 1 : 0,
-    dominant_activity_state: classifyActivityState(meanActivity),
+    ...DEFAULT_FEEDING_SCHEDULE,
+    pigId,
   };
 };
 
-/**
- * Finalize and upsert one closed hourly bucket from raw sensor_data.
- * Exported for deterministic pipeline and test helpers.
- */
+const toStoredSensorRow = async (data: SensorDataPoint, deviceId: string, pigId: string) => {
+  const tagged = tagSensorDataPoint(data, await getFeedingScheduleForPig(pigId));
+  return {
+    timestamp: tagged.timestamp,
+    device_id: deviceId,
+    pig_id: pigId,
+    temp: tagged.temp,
+    activity_intensity: tagged.activityIntensity,
+    activity_state: tagged.activityState,
+    pitch_angle: tagged.pitchAngle,
+    feeding_posture_detected: tagged.feedingPostureDetected ? 1 : 0,
+    env_temp: tagged.envTemp,
+    humidity: tagged.humidity,
+    thi: tagged.thi ?? null,
+    fever_flag: tagged.feverFlag ? 1 : 0,
+    lethargy_flag: tagged.lethargyFlag ? 1 : 0,
+    heat_stress_flag: tagged.heatStressFlag ? 1 : 0,
+    severe_heat_flag: tagged.severeHeatFlag ? 1 : 0,
+    within_feeding_window: tagged.withinFeedingWindow ? 1 : 0,
+    true_eating_event: tagged.trueEatingEvent ? 1 : 0,
+    raw_risk_label: tagged.rawRiskLabel ?? 'normal',
+  };
+};
+
+const buildHourlyAnalyticsSummaryFromRows = (
+  pigId: string,
+  bucketStartMs: number,
+  rawRows: any[]
+): HourlyAnalyticsSummary | null => {
+  if (rawRows.length === 0) return null;
+
+  const totals = rawRows.reduce(
+    (acc: any, row: any) => ({
+      temp: acc.temp + Number(row.temp ?? 0),
+      envTemp: acc.envTemp + Number(row.env_temp ?? 0),
+      humidity: acc.humidity + Number(row.humidity ?? 0),
+      activity: acc.activity + Number(row.activity_intensity ?? 0),
+      pitch: acc.pitch + Number(row.pitch_angle ?? 0),
+      thi: acc.thi + Number(row.thi ?? calculateTHI(Number(row.env_temp ?? 0), Number(row.humidity ?? 0))),
+      fever: acc.fever + Number(row.fever_flag ?? 0),
+      heat: acc.heat + Number(row.heat_stress_flag ?? 0),
+      severeHeat: acc.severeHeat + Number(row.severe_heat_flag ?? 0),
+      lethargy: acc.lethargy + Number(row.lethargy_flag ?? 0),
+      eating: acc.eating + Number(row.true_eating_event ?? 0),
+      resting: acc.resting + (String(row.activity_state ?? '') === 'Resting/Lethargy' ? 1 : 0),
+      standing: acc.standing + (String(row.activity_state ?? '') === 'Standing/Minor Movement' ? 1 : 0),
+      distress: acc.distress + (String(row.activity_state ?? '') === 'High Activity/Distress' ? 1 : 0),
+    }),
+    {
+      temp: 0,
+      envTemp: 0,
+      humidity: 0,
+      activity: 0,
+      pitch: 0,
+      thi: 0,
+      fever: 0,
+      heat: 0,
+      severeHeat: 0,
+      lethargy: 0,
+      eating: 0,
+      resting: 0,
+      standing: 0,
+      distress: 0,
+    }
+  );
+
+  const n = rawRows.length;
+  const maxTemp = Math.max(...rawRows.map((row) => Number(row.temp ?? 0)));
+  const maxTHI = Math.max(
+    ...rawRows.map((row) => Number(row.thi ?? calculateTHI(Number(row.env_temp ?? 0), Number(row.humidity ?? 0))))
+  );
+  const dominantActivityState =
+    totals.distress >= totals.standing && totals.distress >= totals.resting
+      ? 'High Activity/Distress'
+      : totals.standing >= totals.resting
+        ? 'Standing/Minor Movement'
+        : 'Resting/Lethargy';
+
+  return {
+    date: toLocalDateString(bucketStartMs),
+    hour: new Date(bucketStartMs).getHours(),
+    pigId,
+    meanTemp: Math.round((totals.temp / n) * 100) / 100,
+    maxTemp: Math.round(maxTemp * 100) / 100,
+    meanEnvTemp: Math.round((totals.envTemp / n) * 100) / 100,
+    meanHumidity: Math.round((totals.humidity / n) * 100) / 100,
+    meanActivity: Math.round((totals.activity / n) * 100) / 100,
+    meanPitch: Math.round((totals.pitch / n) * 100) / 100,
+    avgTHI: Math.round((totals.thi / n) * 10) / 10,
+    maxTHI: Math.round(maxTHI * 10) / 10,
+    sampleCount: n,
+    feverEventCount: totals.fever,
+    heatStressEventCount: totals.heat,
+    severeHeatEventCount: totals.severeHeat,
+    lethargyEventCount: totals.lethargy,
+    trueEatingEventCount: totals.eating,
+    restingRatio: Math.round((totals.resting / n) * 100) / 100,
+    standingRatio: Math.round((totals.standing / n) * 100) / 100,
+    distressRatio: Math.round((totals.distress / n) * 100) / 100,
+    dominantActivityState: dominantActivityState as HourlyAnalyticsSummary['dominantActivityState'],
+    feedingScheduleAdherence: Math.round((totals.eating / n) * 100) / 100,
+    highRiskHourFlag: totals.severeHeat > 0 || totals.fever > 0,
+  };
+};
+
 export const finalizeHourlyAggregateBucket = async (pigId: string, bucketStartMs: number): Promise<void> => {
   try {
-    const bucketEndMs = bucketStartMs + HOUR_MS - 1;
-    const rawRows = await dbService.getSensorData(bucketStartMs, bucketEndMs, pigId);
-    const aggregate = buildHourlyAggregateFromRows(pigId, bucketStartMs, rawRows);
+    const rawRows = await dbService.getSensorData(bucketStartMs, bucketStartMs + HOUR_MS - 1, pigId);
+    const summary = buildHourlyAnalyticsSummaryFromRows(pigId, bucketStartMs, rawRows);
+    if (!summary) return;
 
-    if (!aggregate) {
-      return;
-    }
-
-    await dbService.upsertHourlyAggregate(aggregate);
-    console.log(`✅ Finalized hourly aggregate for ${pigId} @ ${aggregate.date} ${aggregate.hour}:00 (${aggregate.sample_count} samples)`);
+    await dbService.upsertHourlyAggregate({
+      date: summary.date,
+      hour: summary.hour,
+      pig_id: pigId,
+      mean_temp: summary.meanTemp,
+      mean_env_temp: summary.meanEnvTemp,
+      mean_humidity: summary.meanHumidity,
+      mean_activity: summary.meanActivity,
+      mean_pitch: summary.meanPitch,
+      sample_count: summary.sampleCount,
+      thi: summary.avgTHI,
+      lethargy_alert: summary.lethargyEventCount > 0 ? 1 : 0,
+      dominant_activity_state: summary.dominantActivityState,
+      max_temp: summary.maxTemp,
+      max_thi: summary.maxTHI,
+      fever_event_count: summary.feverEventCount,
+      heat_stress_event_count: summary.heatStressEventCount,
+      severe_heat_event_count: summary.severeHeatEventCount,
+      true_eating_event_count: summary.trueEatingEventCount,
+      resting_ratio: summary.restingRatio,
+      standing_ratio: summary.standingRatio,
+      distress_ratio: summary.distressRatio,
+      feeding_schedule_adherence: summary.feedingScheduleAdherence,
+      high_risk_hour_flag: summary.highRiskHourFlag ? 1 : 0,
+    });
   } catch (error) {
-    console.error('❌ Error finalizing hourly aggregate bucket:', error);
+    console.error('❌ Error finalizing hourly analytics bucket:', error);
   }
 };
 
-const runDeterministicForClosedHour = async (pigId: string, closedHourStartMs: number): Promise<void> => {
-  if (!isDeterministicEnabled()) return;
-  try {
-    // Daily assessments are on-demand from the UI to reduce token usage during testing.
-    await runHourlyInsightForBucket(pigId, closedHourStartMs);
-  } catch (error) {
-    console.error('❌ Error running deterministic pipeline for closed hour:', error);
-  }
-};
-
-/**
- * Initialize the logging system (database only)
- * All data is stored in SQLite on Android internal storage
- */
 export const initializeLogger = async (): Promise<void> => {
   try {
-    // Initialize SQL database (stores data on Android internal storage)
     await dbService.initialize();
-    console.log('✅ Logger initialized - Data will be stored on Android device');
+    console.log('✅ Logger initialized - analytics-first storage is ready');
   } catch (error) {
     console.error('❌ Error initializing logger:', error);
-    // Don't throw - allow app to continue, will retry on next data insert
   }
 };
 
-/**
- * Log a new sensor data point to the database
- * Stores ALL individual readings for detailed analysis
- */
 export const logSensorData = async (
   data: SensorDataPoint,
-  deviceId: string = 'PigFit_Device',
-  pigId: string = 'LIVE-PIG-01'
+  deviceId = 'PigFit_Device',
+  pigId = 'LIVE-PIG-01'
 ): Promise<void> => {
   try {
-    // Update current device and pig IDs
-    currentDeviceId = deviceId;
     currentPigId = pigId;
+    const stored = await toStoredSensorRow(data, deviceId, pigId);
+    await dbService.insertSensorData(stored);
 
-    // === DATABASE LOGGING (ALL INDIVIDUAL READINGS) ===
-    // Store every single reading in SQLite database on Android device
-    await dbService.insertSensorData({
-      timestamp: data.timestamp,
-      device_id: deviceId,
-      pig_id: pigId,
-      temp: data.temp,
-      activity_intensity: data.activityIntensity,
-      activity_state: classifyActivityState(data.activityIntensity),
-      pitch_angle: data.pitchAngle,
-      feed: data.feed,
-      env_temp: data.envTemp,
-      humidity: data.humidity,
-    });
-
-    // Hour-close finalization:
-    // when we enter a new hour, finalize the previous hour's bucket for this pig.
     const currentHourStart = getHourStartMs(data.timestamp);
     const previousHourStart = currentHourStart - HOUR_MS;
     const lastSeenHourStart = lastSeenHourByPig.get(pigId);
 
     if (lastSeenHourStart === undefined) {
-      // Best-effort catch-up on app restart: finalize prior closed hour once.
       await finalizeHourlyAggregateBucket(pigId, previousHourStart);
-      await runDeterministicForClosedHour(pigId, previousHourStart);
       lastSeenHourByPig.set(pigId, currentHourStart);
     } else if (currentHourStart > lastSeenHourStart) {
       await finalizeHourlyAggregateBucket(pigId, lastSeenHourStart);
-      await runDeterministicForClosedHour(pigId, lastSeenHourStart);
       lastSeenHourByPig.set(pigId, currentHourStart);
     } else if (currentHourStart < lastSeenHourStart) {
-      // Handle clock skew or out-of-order packets by moving marker backward.
       lastSeenHourByPig.set(pigId, currentHourStart);
     }
 
-    triggerPeriodAggregateRefresh(pigId, 'ingest');
-    console.log('✅ Sensor data stored in database');
-    
   } catch (error) {
     console.error('❌ Error logging sensor data:', error);
   }
 };
 
-/**
- * Stage 2: Temporal Aggregation
- * Calculates hourly means for all variables from sensor data points
- */
-const summarizeHourlyData = (hour: number, dataPoints: SensorDataPoint[]) => {
-  if (dataPoints.length === 0) return undefined;
-
-  const sum = dataPoints.reduce((acc, p) => ({
-    temp: acc.temp + p.temp,
-    envTemp: acc.envTemp + p.envTemp,
-    humidity: acc.humidity + p.humidity,
-    activity: acc.activity + p.activityIntensity,
-    pitch: acc.pitch + p.pitchAngle,
-    feed: acc.feed + p.feed,
-  }), { temp: 0, envTemp: 0, humidity: 0, activity: 0, pitch: 0, feed: 0 });
-
-  const count = dataPoints.length;
-  const means = {
-    meanTemp: sum.temp / count,
-    meanEnvTemp: sum.envTemp / count,
-    meanHumidity: sum.humidity / count,
-    meanActivity: sum.activity / count,
-    meanPitch: sum.pitch / count,
-    meanFeed: sum.feed / count,
-  };
-
-  // Stage 3: Contextual Input Generation
-  const contextual = generateContextualInputs(
-    hour, 
-    means.meanTemp, 
-    means.meanEnvTemp, 
-    means.meanHumidity, 
-    means.meanActivity
-  );
-
-  // Classify the hourly mean activity into a behavioral state
-  const dominantActivityState = classifyActivityState(means.meanActivity);
-
-  return {
-    ...means,
-    ...contextual,
-    dominantActivityState,
-  };
-};
-
-/**
- * Load sensor data for a specific time period
- * Loads all individual readings from the SQL database
- */
-export const loadSensorData = async (
-  periodHours: number,
-  pigId?: string
-): Promise<SensorDataPoint[]> => {
+export const loadSensorData = async (periodHours: number, pigId?: string): Promise<SensorDataPoint[]> => {
   try {
     const now = Date.now();
-    const startTime = now - (periodHours * 60 * 60 * 1000);
-    
-    // Load from SQL database (has all individual readings)
-    const sqlData = await dbService.getSensorData(startTime, now, pigId);
-    
-    // Convert SQL format to SensorDataPoint format
-    const dataPoints: SensorDataPoint[] = sqlData.map((record: any) => ({
-      timestamp: record.timestamp,
-      temp: record.temp,
-      envTemp: record.env_temp,
-      humidity: record.humidity,
-      activityIntensity: record.activity_intensity,
-      pitchAngle: record.pitch_angle,
-      feed: record.feed,
+    const sqlData = await dbService.getSensorData(now - periodHours * HOUR_MS, now, pigId);
+    return sqlData.map((record: any) => ({
+      timestamp: Number(record.timestamp),
+      temp: Number(record.temp),
+      envTemp: Number(record.env_temp),
+      humidity: Number(record.humidity),
+      activityIntensity: Number(record.activity_intensity),
+      pitchAngle: Number(record.pitch_angle),
+      feedingPostureDetected: Number(record.feeding_posture_detected ?? 0) === 1,
+      thi: record.thi == null ? undefined : Number(record.thi),
+      feverFlag: Number(record.fever_flag ?? 0) === 1,
+      lethargyFlag: Number(record.lethargy_flag ?? 0) === 1,
+      heatStressFlag: Number(record.heat_stress_flag ?? 0) === 1,
+      severeHeatFlag: Number(record.severe_heat_flag ?? 0) === 1,
+      withinFeedingWindow: Number(record.within_feeding_window ?? 0) === 1,
+      trueEatingEvent: Number(record.true_eating_event ?? 0) === 1,
+      activityState: record.activity_state ?? classifyActivityState(Number(record.activity_intensity ?? 0)),
+      rawRiskLabel: record.raw_risk_label ?? 'normal',
     }));
-    
-    console.log(`📊 Loaded ${dataPoints.length} sensor data points from the last ${periodHours} hours`);
-    return dataPoints;
   } catch (error) {
     console.error('❌ Error loading sensor data:', error);
     return [];
   }
 };
 
-/**
- * Delete old sensor data from database
- */
-export const cleanupOldLogs = async (daysToKeep: number = 30): Promise<void> => {
+export const cleanupOldLogs = async (daysToKeep = 30): Promise<void> => {
   try {
-    const deletedCount = await dbService.deleteOldData(daysToKeep);
-    console.log(`🗑️ Deleted ${deletedCount} old sensor records (older than ${daysToKeep} days)`);
+    await dbService.deleteOldData(daysToKeep);
   } catch (error) {
     console.error('❌ Error cleaning up old data:', error);
   }
 };
 
-/**
- * Get database statistics
- */
 export const getLogStats = async (): Promise<{ fileCount: number; totalPoints: number }> => {
-  try {
-    const stats = await dbService.getStats();
-    console.log(`📊 Database Stats: ${stats.sensorDataCount} sensor readings, ${stats.aggregatesCount} hourly aggregates`);
-    return { fileCount: 1, totalPoints: stats.sensorDataCount }; // Return combined stats
-  } catch (error) {
-    console.error('❌ Error getting log stats:', error);
-    return { fileCount: 0, totalPoints: 0 };
-  }
+  const stats = await dbService.getStats();
+  return { fileCount: 1, totalPoints: stats.sensorDataCount };
 };
 
-/**
- * Get real-time database statistics for debug panel
- */
 export const getDatabaseStats = async () => {
   try {
-    // Get raw sensor records from last 24 hours
     const rawData = await loadSensorData(24);
-    
-    // Get hourly aggregates count
     const hourlyStats = await dbService.getStats();
-    
-    const stats = {
+    return {
       rawSensorRecords: rawData.length,
       hourlyAggregates: hourlyStats.aggregatesCount || 0,
       latestRecord: rawData.length > 0 ? rawData[rawData.length - 1] : null,
       timestamp: new Date().toLocaleTimeString(),
     };
-    
-    console.log('📊 DB STATS:', stats);
-    return stats;
   } catch (error) {
     console.error('❌ Error getting DB stats:', error);
     return null;
   }
 };
 
-/**
- * Get deterministic outputs for UI consumption.
- */
+export const getCurrentHourlyAnalytics = async (pigId: string, bucketDay?: string) => {
+  const day = bucketDay ?? toLocalDateString(Date.now());
+  const rows = await dbService.getHourlyAggregates(day, day, pigId);
+  return rows[rows.length - 1] ?? null;
+};
+
 export const getDeterministicInsights = async (pigId: string, bucketDay?: string) => {
   try {
     const day = bucketDay ?? toLocalDateString(Date.now());
@@ -316,30 +329,9 @@ export const getDeterministicInsights = async (pigId: string, bucketDay?: string
       dbService.getHourlyInsightsByDate(pigId, day),
       dbService.getDailyAssessment(pigId, day),
     ]);
-
-    const dedupedHourly = [...hourly]
-      .sort((a: any, b: any) => {
-        const bucketDelta = Number(a.bucket_start ?? 0) - Number(b.bucket_start ?? 0);
-        if (bucketDelta !== 0) return bucketDelta;
-        const schemaA = String(a.schema_version ?? '');
-        const schemaB = String(b.schema_version ?? '');
-        return schemaB.localeCompare(schemaA);
-      })
-      .reduce((acc: any[], row: any) => {
-        const previous = acc[acc.length - 1];
-        if (previous && Number(previous.bucket_start) === Number(row.bucket_start)) {
-          if (String(row.schema_version ?? '').localeCompare(String(previous.schema_version ?? '')) > 0) {
-            acc[acc.length - 1] = row;
-          }
-          return acc;
-        }
-        acc.push(row);
-        return acc;
-      }, []);
-
     return {
       bucketDay: day,
-      hourlyInsights: dedupedHourly,
+      hourlyInsights: hourly,
       dailyAssessment: daily,
     };
   } catch (error) {
@@ -352,40 +344,7 @@ export const getDeterministicInsights = async (pigId: string, bucketDay?: string
   }
 };
 
-// ─── Period Aggregate Config ─────────────────────────────────────────────────────
-
-/**
- * Duration of the full window (ms) per timeframe
- */
-const PERIOD_DURATION_MS: Record<TrendPeriod, number> = {
-  '30m': 30 * 60 * 1000,
-  '1h':   1 * 60 * 60 * 1000,
-  '4h':   4 * 60 * 60 * 1000,
-  '12h': 12 * 60 * 60 * 1000,
-};
-
-/**
- * Bucket size (ms) per timeframe — controls chart resolution:
- *   30m  → 5-min buckets  → 6 data points
- *   1h   → 10-min buckets → 6 data points
- *   4h   → 30-min buckets → 8 data points
- *   12h  → 60-min buckets → 12 data points
- */
-const PERIOD_BUCKET_MS: Record<TrendPeriod, number> = {
-  '30m':  5 * 60 * 1000,
-  '1h':  10 * 60 * 1000,
-  '4h':  30 * 60 * 1000,
-  '12h': 60 * 60 * 1000,
-};
-
-/**
- * Load chart-ready trend points.
- * Prefers pre-bucketed period_aggregates; falls back to raw sensor_data if empty.
- */
-export const loadTrendData = async (
-  periodType: TrendPeriod,
-  pigId: string
-): Promise<SensorDataPoint[]> => {
+export const loadTrendData = async (periodType: TrendPeriod, pigId: string): Promise<SensorDataPoint[]> => {
   try {
     const now = Date.now();
     const periodStart = now - PERIOD_DURATION_MS[periodType];
@@ -400,7 +359,7 @@ export const loadTrendData = async (
         humidity: row.mean_humidity ?? 0,
         activityIntensity: row.mean_activity ?? 0,
         pitchAngle: row.mean_pitch ?? 0,
-        feed: row.mean_feed ?? 0,
+        feedingPostureDetected: false,
       }));
     }
 
@@ -411,7 +370,6 @@ export const loadTrendData = async (
       '12h': 12,
     };
 
-    console.log(`⚠️ No period aggregates for ${pigId} [${periodType}], using raw fallback`);
     return loadSensorData(periodHoursMap[periodType], pigId);
   } catch (error) {
     console.error('❌ Error loading trend data:', error);
@@ -421,36 +379,23 @@ export const loadTrendData = async (
 
 export const getCurrentIngestionPigId = (): string => currentPigId;
 
-/**
- * Trigger period aggregate refresh with throttle + in-flight protection.
- * Uses non-blocking execution to avoid slowing down BLE ingestion.
- */
 export const triggerPeriodAggregateRefresh = (
   pigId: string,
   source: PeriodRefreshSource = 'ingest',
-  force: boolean = false
+  force = false
 ): void => {
   const now = Date.now();
   const lastRun = lastPeriodRefreshAtByPig.get(pigId) ?? 0;
 
-  if (periodRefreshInFlightByPig.has(pigId)) {
-    console.log(`⏭️ Skipping period refresh (${source}) for ${pigId}: run already in-flight`);
-    return;
-  }
-
-  if (!force && now - lastRun < PERIOD_AGG_REFRESH_THROTTLE_MS) {
-    console.log(`⏭️ Skipping period refresh (${source}) for ${pigId}: throttled`);
-    return;
-  }
+  if (periodRefreshInFlightByPig.has(pigId)) return;
+  if (!force && now - lastRun < PERIOD_AGG_REFRESH_THROTTLE_MS) return;
 
   periodRefreshInFlightByPig.add(pigId);
   lastPeriodRefreshAtByPig.set(pigId, now);
 
   void (async () => {
     try {
-      console.log(`🔄 Starting period refresh (${source}) for ${pigId}`);
       await refreshAllPeriodAggregates(pigId);
-      console.log(`✅ Period refresh completed (${source}) for ${pigId}`);
     } catch (error) {
       console.error(`❌ Period refresh failed (${source}) for ${pigId}:`, error);
     } finally {
@@ -459,104 +404,57 @@ export const triggerPeriodAggregateRefresh = (
   })();
 };
 
-/**
- * Compute and store period aggregates for a specific pig and timeframe.
- *
- * Flow:
- *   1. Load raw sensor_data for the full period window
- *   2. Split into fixed-size buckets
- *   3. Compute means + classify activity state per bucket
- *   4. Upsert each bucket into period_aggregates
- *
- * Call this after each BLE reading OR on a timer (e.g. every 5 minutes).
- */
 export const computeAndStorePeriodAggregates = async (
   pigId: string,
   periodType: TrendPeriod
 ): Promise<void> => {
   try {
     const now = Date.now();
-    const windowMs = PERIOD_DURATION_MS[periodType];
+    const periodStart = now - PERIOD_DURATION_MS[periodType];
     const bucketMs = PERIOD_BUCKET_MS[periodType];
-    const periodStart = now - windowMs;
-
-    // Load ALL raw sensor readings for this pig inside the window
     const rawRows = await dbService.getSensorData(periodStart, now, pigId);
+    if (rawRows.length === 0) return;
 
-    if (rawRows.length === 0) {
-      console.log(`⚠️ No raw data for pig ${pigId} in ${periodType} window`);
-      return;
-    }
-
-    // Build bucket boundaries (oldest → newest)
-    const bucketCount = Math.ceil(windowMs / bucketMs);
-
+    const bucketCount = Math.ceil(PERIOD_DURATION_MS[periodType] / bucketMs);
     for (let i = 0; i < bucketCount; i++) {
       const bucketStart = periodStart + i * bucketMs;
-      const bucketEnd   = bucketStart + bucketMs;
+      const bucketEnd = bucketStart + bucketMs;
+      const points = rawRows.filter((row: any) => row.timestamp >= bucketStart && row.timestamp < bucketEnd);
+      if (points.length === 0) continue;
 
-      // Filter readings that fall inside this bucket
-      const points = rawRows.filter(
-        (r: any) => r.timestamp >= bucketStart && r.timestamp < bucketEnd
-      );
-
-      if (points.length === 0) continue; // skip empty buckets
-
-      // Compute means in a single pass
-      const sums = points.reduce(
-        (acc: any, p: any) => ({
-          temp:     acc.temp     + (p.temp               ?? 0),
-          envTemp:  acc.envTemp  + (p.env_temp           ?? 0),
-          humidity: acc.humidity + (p.humidity           ?? 0),
-          activity: acc.activity + (p.activity_intensity ?? 0),
-          pitch:    acc.pitch    + (p.pitch_angle        ?? 0),
-          feed:     acc.feed     + (p.feed               ?? 0),
-        }),
-        { temp: 0, envTemp: 0, humidity: 0, activity: 0, pitch: 0, feed: 0 }
-      );
-
-      const n = points.length;
-      const meanTemp     = sums.temp     / n;
-      const meanEnvTemp  = sums.envTemp  / n;
-      const meanHumidity = sums.humidity / n;
-      const meanActivity = sums.activity / n;
-      const meanPitch    = sums.pitch    / n;
-      const meanFeed     = sums.feed     / n;
-
-      // Derive health indicators from the bucket
-      const thi          = calculateTHI(meanEnvTemp, meanHumidity);
-      const bucketHour   = new Date(bucketStart).getHours();
-      const lethargyFlag = checkLethargy(meanActivity, bucketHour) ? 1 : 0;
-      const actState     = classifyActivityState(meanActivity);
+      const summary = buildHourlyAnalyticsSummaryFromRows(pigId, bucketStart, points);
+      if (!summary) continue;
 
       await dbService.upsertPeriodAggregate({
-        period_type:             periodType,
-        bucket_start:            bucketStart,
-        bucket_end:              bucketEnd,
-        pig_id:                  pigId,
-        mean_temp:               Math.round(meanTemp     * 100) / 100,
-        mean_env_temp:           Math.round(meanEnvTemp  * 100) / 100,
-        mean_humidity:           Math.round(meanHumidity * 100) / 100,
-        mean_activity:           Math.round(meanActivity * 100) / 100,
-        mean_pitch:              Math.round(meanPitch    * 100) / 100,
-        mean_feed:               Math.round(meanFeed     * 100) / 100,
-        thi:                     Math.round(thi * 10) / 10,
-        lethargy_alert:          lethargyFlag,
-        dominant_activity_state: actState,
-        sample_count:            n,
+        period_type: periodType,
+        bucket_start: bucketStart,
+        bucket_end: bucketEnd,
+        pig_id: pigId,
+        mean_temp: summary.meanTemp,
+        mean_env_temp: summary.meanEnvTemp,
+        mean_humidity: summary.meanHumidity,
+        mean_activity: summary.meanActivity,
+        mean_pitch: summary.meanPitch,
+        thi: summary.avgTHI,
+        lethargy_alert: summary.lethargyEventCount > 0 ? 1 : 0,
+        dominant_activity_state: summary.dominantActivityState,
+        sample_count: summary.sampleCount,
+        max_temp: summary.maxTemp,
+        max_thi: summary.maxTHI,
+        fever_event_count: summary.feverEventCount,
+        heat_stress_event_count: summary.heatStressEventCount,
+        severe_heat_event_count: summary.severeHeatEventCount,
+        true_eating_event_count: summary.trueEatingEventCount,
+        resting_ratio: summary.restingRatio,
+        standing_ratio: summary.standingRatio,
+        distress_ratio: summary.distressRatio,
       });
     }
-
-    console.log(`✅ Period aggregates updated for pig ${pigId} [${periodType}]`);
   } catch (error) {
     console.error(`❌ Error computing period aggregates for ${pigId} [${periodType}]:`, error);
   }
 };
 
-/**
- * Convenience: recompute all 4 timeframes for a pig at once.
- * Call after receiving a new BLE reading.
- */
 export const refreshAllPeriodAggregates = async (pigId: string): Promise<void> => {
   const periods: TrendPeriod[] = ['30m', '1h', '4h', '12h'];
   for (const period of periods) {

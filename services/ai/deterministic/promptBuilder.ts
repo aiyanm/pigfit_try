@@ -6,7 +6,7 @@ import type {
 } from './contracts';
 
 interface HourlyRuleContext {
-  case: string;
+  label: string;
   severity: Severity;
   title: string;
   description: string;
@@ -21,11 +21,21 @@ interface HourlyAggregateLike {
   mean_humidity?: number | null;
   mean_activity?: number | null;
   mean_pitch?: number | null;
-  mean_feed?: number | null;
   sample_count?: number | null;
   thi?: number | null;
   lethargy_alert?: number | null;
   dominant_activity_state?: string | null;
+  max_temp?: number | null;
+  max_thi?: number | null;
+  fever_event_count?: number | null;
+  heat_stress_event_count?: number | null;
+  severe_heat_event_count?: number | null;
+  true_eating_event_count?: number | null;
+  resting_ratio?: number | null;
+  standing_ratio?: number | null;
+  distress_ratio?: number | null;
+  feeding_schedule_adherence?: number | null;
+  high_risk_hour_flag?: number | null;
 }
 
 interface DailySourceRow {
@@ -99,7 +109,19 @@ const buildHourlyEvidence = (aggregate: HourlyAggregateLike, rule: HourlyRuleCon
   if (typeof aggregate.sample_count === 'number') {
     evidence.push(`sample_count=${aggregate.sample_count} observations support this hour`);
   }
-  evidence.push(`rule_case=${rule.case} (${rule.description})`);
+  if (typeof aggregate.max_temp === 'number') {
+    evidence.push(`max_temp=${formatNumber(aggregate.max_temp, 1)}C peak temperature this hour`);
+  }
+  if (typeof aggregate.fever_event_count === 'number') {
+    evidence.push(`fever_event_count=${aggregate.fever_event_count}`);
+  }
+  if (typeof aggregate.heat_stress_event_count === 'number') {
+    evidence.push(`heat_stress_event_count=${aggregate.heat_stress_event_count}`);
+  }
+  if (typeof aggregate.true_eating_event_count === 'number') {
+    evidence.push(`true_eating_event_count=${aggregate.true_eating_event_count}`);
+  }
+  evidence.push(`analytics_label=${rule.label} (${rule.description})`);
   return evidence.slice(0, 5);
 };
 
@@ -392,17 +414,28 @@ export const buildHourlyPrompt = (
       mean_humidity: aggregate.mean_humidity,
       mean_activity: aggregate.mean_activity,
       mean_pitch: aggregate.mean_pitch,
-      mean_feed: aggregate.mean_feed,
       sample_count: aggregate.sample_count ?? 0,
       thi: aggregate.thi ?? null,
       lethargy_alert: aggregate.lethargy_alert ?? 0,
       dominant_activity_state: aggregate.dominant_activity_state ?? 'Resting',
+      max_temp: aggregate.max_temp ?? null,
+      max_thi: aggregate.max_thi ?? null,
+      fever_event_count: aggregate.fever_event_count ?? 0,
+      heat_stress_event_count: aggregate.heat_stress_event_count ?? 0,
+      severe_heat_event_count: aggregate.severe_heat_event_count ?? 0,
+      true_eating_event_count: aggregate.true_eating_event_count ?? 0,
+      resting_ratio: aggregate.resting_ratio ?? 0,
+      standing_ratio: aggregate.standing_ratio ?? 0,
+      distress_ratio: aggregate.distress_ratio ?? 0,
+      feeding_schedule_adherence: aggregate.feeding_schedule_adherence ?? 0,
+      high_risk_hour_flag: aggregate.high_risk_hour_flag ?? 0,
     },
     rules: [
-      'critical if extreme heat stress or severe lethargy signals',
-      'warning if mild/moderate anomalies',
-      'normal if stable ranges',
-      'Never downgrade below rule.severity. You may escalate if aggregate evidence strongly supports higher severity.',
+      'Base your judgment on analytics counts, ratios, THI, and temperature peaks.',
+      'critical if the hour shows severe heat stress, fever spikes, or repeated high-risk events.',
+      'warning if the hour shows mild/moderate anomalies or elevated event counts.',
+      'normal if the hour is stable with low-risk metrics.',
+      'Never downgrade below the provided analytics severity.',
     ],
     rule,
   });
@@ -441,7 +474,7 @@ export const buildDailyPrompt = (
     pig_id: pigId,
     bucket_day: bucketDay,
     hourly_insights: hourlyInsights,
-    aggregation_rule: 'Daily assessment prioritizes the strongest hourly rule severity and explains the day-level pattern.',
+    aggregation_rule: 'Daily assessment prioritizes the strongest hourly analytics severity and explains the day-level pattern.',
   });
 
   return { system, user, context };

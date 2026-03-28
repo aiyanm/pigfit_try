@@ -22,13 +22,13 @@ const StatusCard = ({ label, value, color, bgColor }: StatusCardProps) => (
 interface LivestockItemProps {
   id: string;
   temp: number;
-  feed: number;
+  feedingPostureDetected: boolean;
   pitchAngle: number;
   status: string;
   onNavigateToAnalyze?: () => void;
 }
 
-const LivestockItem = ({ id, temp, feed, pitchAngle, status, onNavigateToAnalyze }: LivestockItemProps) => {
+const LivestockItem = ({ id, temp, feedingPostureDetected, pitchAngle, status, onNavigateToAnalyze }: LivestockItemProps) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [weight, setWeight] = useState('');
   const [isEditingWeight, setIsEditingWeight] = useState(false);
@@ -37,7 +37,7 @@ const LivestockItem = ({ id, temp, feed, pitchAngle, status, onNavigateToAnalyze
   const getFeedingStatus = () => {
     // Head down = pitch angle < 45 degrees (eating posture)
     const isHeadDown = pitchAngle < 45;
-    const isFeedingActive = feed > 0.1;
+    const isFeedingActive = feedingPostureDetected;
 
     if (isHeadDown && isFeedingActive) {
       return {
@@ -329,7 +329,7 @@ export default function DashboardScreen({ navigation }: any) {
             <LivestockItem 
               id="LIVE-PIG-01"
               temp={receivedData.temp}
-              feed={receivedData.feed}
+              feedingPostureDetected={receivedData.feedingPostureDetected}
               pitchAngle={receivedData.pitchAngle}
               status={currentStatus}
               onNavigateToAnalyze={() => navigation.navigate('Analyze')}

@@ -6,15 +6,21 @@ interface SensorData {
   timestamp: number;
   device_id: string;
   pig_id: string;
-  // Pig physiological and behavioral data
   temp: number;
   activity_intensity: number;
-  activity_state?: string;  // 'Resting' | 'Standing/Minor Movement' | 'High Activity/Distress'
+  activity_state?: string;
   pitch_angle: number;
-  feed: number;
-  // Environmental data
+  feeding_posture_detected: number;
   env_temp: number;
   humidity: number;
+  thi?: number | null;
+  fever_flag?: number;
+  lethargy_flag?: number;
+  heat_stress_flag?: number;
+  severe_heat_flag?: number;
+  within_feeding_window?: number;
+  true_eating_event?: number;
+  raw_risk_label?: string;
 }
 
 interface HourlyAggregate {
@@ -26,30 +32,56 @@ interface HourlyAggregate {
   mean_humidity: number;
   mean_activity: number;
   mean_pitch: number;
-  mean_feed: number;
   sample_count?: number;
   thi?: number;
   lethargy_alert?: number;
-  dominant_activity_state?: string; // Most frequent ActivityState for this hour
+  dominant_activity_state?: string;
+  max_temp?: number;
+  max_thi?: number;
+  fever_event_count?: number;
+  heat_stress_event_count?: number;
+  severe_heat_event_count?: number;
+  true_eating_event_count?: number;
+  resting_ratio?: number;
+  standing_ratio?: number;
+  distress_ratio?: number;
+  feeding_schedule_adherence?: number;
+  high_risk_hour_flag?: number;
 }
 
 type TrendPeriod = '30m' | '1h' | '4h' | '12h';
 
 interface PeriodAggregate {
-  period_type: TrendPeriod;  // '30m' | '1h' | '4h' | '12h'
-  bucket_start: number;      // Unix ms — start of this bucket
-  bucket_end: number;        // Unix ms — end of this bucket
+  period_type: TrendPeriod;
+  bucket_start: number;
+  bucket_end: number;
   pig_id: string;
   mean_temp: number;
   mean_env_temp: number;
   mean_humidity: number;
   mean_activity: number;
   mean_pitch: number;
-  mean_feed: number;
   thi?: number;
   lethargy_alert?: number;
   dominant_activity_state?: string;
-  sample_count: number;      // how many raw readings were in this bucket
+  sample_count: number;
+  max_temp?: number;
+  max_thi?: number;
+  fever_event_count?: number;
+  heat_stress_event_count?: number;
+  severe_heat_event_count?: number;
+  true_eating_event_count?: number;
+  resting_ratio?: number;
+  standing_ratio?: number;
+  distress_ratio?: number;
+}
+
+interface FeedingSchedule {
+  pig_id: string;
+  feedings_per_day: number;
+  feeding_times: string;
+  feeding_window_before_minutes: number;
+  feeding_window_after_minutes: number;
 }
 
 interface HourlyInsight {
@@ -144,15 +176,23 @@ class DatabaseService {
             activity_intensity REAL NOT NULL,
             activity_state TEXT DEFAULT 'Resting',
             pitch_angle REAL NOT NULL,
-            feed REAL NOT NULL,
+            feeding_posture_detected INTEGER DEFAULT 0,
             env_temp REAL NOT NULL,
             humidity REAL NOT NULL,
+            thi REAL,
+            fever_flag INTEGER DEFAULT 0,
+            lethargy_flag INTEGER DEFAULT 0,
+            heat_stress_flag INTEGER DEFAULT 0,
+            severe_heat_flag INTEGER DEFAULT 0,
+            within_feeding_window INTEGER DEFAULT 0,
+            true_eating_event INTEGER DEFAULT 0,
+            raw_risk_label TEXT DEFAULT 'normal',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
           );
         `);
         await this.db.execAsync(`
           INSERT INTO sensor_data_new
-            (id, timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, feed, env_temp, humidity, created_at)
+            (id, timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, feeding_posture_detected, env_temp, humidity, created_at)
           SELECT
             id,
             timestamp,
@@ -165,7 +205,7 @@ class DatabaseService {
               ELSE activity_state
             END AS activity_state,
             pitch_angle,
-            feed,
+            CASE WHEN COALESCE(feed, 0) > 0 THEN 1 ELSE 0 END AS feeding_posture_detected,
             env_temp,
             humidity,
             created_at
@@ -203,7 +243,7 @@ class DatabaseService {
       'activity_intensity',
       'activity_state',
       'pitch_angle',
-      'feed',
+      'feeding_posture_detected',
       'env_temp',
       'humidity',
     ];
@@ -311,10 +351,19 @@ class DatabaseService {
           pig_id TEXT NOT NULL,
           temp REAL NOT NULL,
           activity_intensity REAL NOT NULL,
+          activity_state TEXT DEFAULT 'Resting/Lethargy',
           pitch_angle REAL NOT NULL,
-          feed REAL NOT NULL,
+          feeding_posture_detected INTEGER DEFAULT 0,
           env_temp REAL NOT NULL,
           humidity REAL NOT NULL,
+          thi REAL,
+          fever_flag INTEGER DEFAULT 0,
+          lethargy_flag INTEGER DEFAULT 0,
+          heat_stress_flag INTEGER DEFAULT 0,
+          severe_heat_flag INTEGER DEFAULT 0,
+          within_feeding_window INTEGER DEFAULT 0,
+          true_eating_event INTEGER DEFAULT 0,
+          raw_risk_label TEXT DEFAULT 'normal',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
       `);
@@ -331,7 +380,17 @@ class DatabaseService {
           mean_humidity REAL,
           mean_activity REAL,
           mean_pitch REAL,
-          mean_feed REAL,
+          max_temp REAL,
+          max_thi REAL,
+          fever_event_count INTEGER DEFAULT 0,
+          heat_stress_event_count INTEGER DEFAULT 0,
+          severe_heat_event_count INTEGER DEFAULT 0,
+          true_eating_event_count INTEGER DEFAULT 0,
+          resting_ratio REAL DEFAULT 0,
+          standing_ratio REAL DEFAULT 0,
+          distress_ratio REAL DEFAULT 0,
+          feeding_schedule_adherence REAL DEFAULT 0,
+          high_risk_hour_flag INTEGER DEFAULT 0,
           thi REAL,
           lethargy_alert INTEGER DEFAULT 0,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -352,13 +411,34 @@ class DatabaseService {
           mean_humidity REAL,
           mean_activity REAL,
           mean_pitch REAL,
-          mean_feed REAL,
+          max_temp REAL,
+          max_thi REAL,
+          fever_event_count INTEGER DEFAULT 0,
+          heat_stress_event_count INTEGER DEFAULT 0,
+          severe_heat_event_count INTEGER DEFAULT 0,
+          true_eating_event_count INTEGER DEFAULT 0,
+          resting_ratio REAL DEFAULT 0,
+          standing_ratio REAL DEFAULT 0,
+          distress_ratio REAL DEFAULT 0,
           thi REAL,
           lethargy_alert INTEGER DEFAULT 0,
           dominant_activity_state TEXT DEFAULT 'Resting',
           sample_count INTEGER DEFAULT 0,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(period_type, bucket_start, pig_id)
+        );
+      `);
+
+      await this.db.execAsync(`
+        CREATE TABLE IF NOT EXISTS feeding_schedules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pig_id TEXT NOT NULL UNIQUE,
+          feedings_per_day INTEGER NOT NULL DEFAULT 2,
+          feeding_times TEXT NOT NULL,
+          feeding_window_before_minutes INTEGER NOT NULL DEFAULT 20,
+          feeding_window_after_minutes INTEGER NOT NULL DEFAULT 45,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
       `);
 
@@ -440,6 +520,7 @@ class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_sensor_pig_id ON sensor_data(pig_id);
         CREATE INDEX IF NOT EXISTS idx_hourly_date ON hourly_aggregates(date, hour);
         CREATE INDEX IF NOT EXISTS idx_period_pig ON period_aggregates(pig_id, period_type, bucket_start);
+        CREATE INDEX IF NOT EXISTS idx_feeding_schedule_pig ON feeding_schedules(pig_id);
         CREATE INDEX IF NOT EXISTS idx_device_id ON devices(device_id);
         CREATE INDEX IF NOT EXISTS idx_hourly_insights_pig_bucket ON hourly_insights(pig_id, bucket_start);
         CREATE INDEX IF NOT EXISTS idx_hourly_insights_day ON hourly_insights(pig_id, bucket_date);
@@ -462,6 +543,38 @@ class DatabaseService {
         await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN sample_count INTEGER DEFAULT 0`);
         console.log('✅ Added sample_count column to hourly_aggregates');
       } catch { /* column already exists */ }
+
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN feeding_posture_detected INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN thi REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN fever_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN lethargy_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN heat_stress_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN severe_heat_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN within_feeding_window INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN true_eating_event INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN raw_risk_label TEXT DEFAULT 'normal'`); } catch {}
+
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN max_temp REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN max_thi REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN fever_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN heat_stress_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN severe_heat_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN true_eating_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN resting_ratio REAL DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN standing_ratio REAL DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN distress_ratio REAL DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN feeding_schedule_adherence REAL DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN high_risk_hour_flag INTEGER DEFAULT 0`); } catch {}
+
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN max_temp REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN max_thi REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN fever_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN heat_stress_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN severe_heat_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN true_eating_event_count INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN resting_ratio REAL DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN standing_ratio REAL DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE period_aggregates ADD COLUMN distress_ratio REAL DEFAULT 0`); } catch {}
 
       try {
         await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_case TEXT`);
@@ -497,9 +610,12 @@ class DatabaseService {
         `INSERT INTO period_aggregates
          (period_type, bucket_start, bucket_end, pig_id,
           mean_temp, mean_env_temp, mean_humidity,
-          mean_activity, mean_pitch, mean_feed,
-          thi, lethargy_alert, dominant_activity_state, sample_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          mean_activity, mean_pitch,
+          thi, lethargy_alert, dominant_activity_state, sample_count,
+          max_temp, max_thi, fever_event_count, heat_stress_event_count,
+          severe_heat_event_count, true_eating_event_count,
+          resting_ratio, standing_ratio, distress_ratio)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(period_type, bucket_start, pig_id) DO UPDATE SET
            bucket_end              = excluded.bucket_end,
            mean_temp               = excluded.mean_temp,
@@ -507,11 +623,19 @@ class DatabaseService {
            mean_humidity           = excluded.mean_humidity,
            mean_activity           = excluded.mean_activity,
            mean_pitch              = excluded.mean_pitch,
-           mean_feed               = excluded.mean_feed,
            thi                     = excluded.thi,
            lethargy_alert          = excluded.lethargy_alert,
            dominant_activity_state = excluded.dominant_activity_state,
-           sample_count            = excluded.sample_count`,
+           sample_count            = excluded.sample_count,
+           max_temp                = excluded.max_temp,
+           max_thi                 = excluded.max_thi,
+           fever_event_count       = excluded.fever_event_count,
+           heat_stress_event_count = excluded.heat_stress_event_count,
+           severe_heat_event_count = excluded.severe_heat_event_count,
+           true_eating_event_count = excluded.true_eating_event_count,
+           resting_ratio           = excluded.resting_ratio,
+           standing_ratio          = excluded.standing_ratio,
+           distress_ratio          = excluded.distress_ratio`,
         [
           data.period_type,
           data.bucket_start,
@@ -522,11 +646,19 @@ class DatabaseService {
           data.mean_humidity,
           data.mean_activity,
           data.mean_pitch,
-          data.mean_feed,
           data.thi ?? null,
           data.lethargy_alert ?? 0,
           data.dominant_activity_state ?? 'Resting',
           data.sample_count,
+          data.max_temp ?? null,
+          data.max_thi ?? null,
+          data.fever_event_count ?? 0,
+          data.heat_stress_event_count ?? 0,
+          data.severe_heat_event_count ?? 0,
+          data.true_eating_event_count ?? 0,
+          data.resting_ratio ?? 0,
+          data.standing_ratio ?? 0,
+          data.distress_ratio ?? 0,
         ]
       );
     } catch (error) {
@@ -571,19 +703,27 @@ class DatabaseService {
 
       await this.db.runAsync(
         `INSERT INTO sensor_data 
-         (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, feed, env_temp, humidity) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, feeding_posture_detected, env_temp, humidity, thi, fever_flag, lethargy_flag, heat_stress_flag, severe_heat_flag, within_feeding_window, true_eating_event, raw_risk_label) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           data.timestamp,
           data.device_id,
           data.pig_id,
           data.temp,
           data.activity_intensity,
-          data.activity_state ?? 'Resting',
+          data.activity_state ?? 'Resting/Lethargy',
           data.pitch_angle,
-          data.feed,
+          data.feeding_posture_detected,
           data.env_temp,
           data.humidity,
+          data.thi ?? null,
+          data.fever_flag ?? 0,
+          data.lethargy_flag ?? 0,
+          data.heat_stress_flag ?? 0,
+          data.severe_heat_flag ?? 0,
+          data.within_feeding_window ?? 0,
+          data.true_eating_event ?? 0,
+          data.raw_risk_label ?? 'normal',
         ]
       );
       console.log('✅ Sensor data inserted');
@@ -608,19 +748,29 @@ class DatabaseService {
 
       await this.db.runAsync(
         `INSERT INTO hourly_aggregates 
-         (date, hour, pig_id, mean_temp, mean_env_temp, mean_humidity, mean_activity, mean_pitch, mean_feed, sample_count, thi, lethargy_alert, dominant_activity_state)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (date, hour, pig_id, mean_temp, mean_env_temp, mean_humidity, mean_activity, mean_pitch, sample_count, thi, lethargy_alert, dominant_activity_state, max_temp, max_thi, fever_event_count, heat_stress_event_count, severe_heat_event_count, true_eating_event_count, resting_ratio, standing_ratio, distress_ratio, feeding_schedule_adherence, high_risk_hour_flag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(date, hour, pig_id) DO UPDATE SET
            mean_temp = excluded.mean_temp,
            mean_env_temp = excluded.mean_env_temp,
            mean_humidity = excluded.mean_humidity,
            mean_activity = excluded.mean_activity,
-           mean_pitch = excluded.mean_pitch,
-           mean_feed = excluded.mean_feed,
+            mean_pitch = excluded.mean_pitch,
            sample_count = excluded.sample_count,
            thi = excluded.thi,
            lethargy_alert = excluded.lethargy_alert,
-           dominant_activity_state = excluded.dominant_activity_state`,
+           dominant_activity_state = excluded.dominant_activity_state,
+           max_temp = excluded.max_temp,
+           max_thi = excluded.max_thi,
+           fever_event_count = excluded.fever_event_count,
+           heat_stress_event_count = excluded.heat_stress_event_count,
+           severe_heat_event_count = excluded.severe_heat_event_count,
+           true_eating_event_count = excluded.true_eating_event_count,
+           resting_ratio = excluded.resting_ratio,
+           standing_ratio = excluded.standing_ratio,
+           distress_ratio = excluded.distress_ratio,
+           feeding_schedule_adherence = excluded.feeding_schedule_adherence,
+           high_risk_hour_flag = excluded.high_risk_hour_flag`,
         [
           data.date,
           data.hour,
@@ -630,11 +780,21 @@ class DatabaseService {
           data.mean_humidity,
           data.mean_activity,
           data.mean_pitch,
-          data.mean_feed,
           data.sample_count ?? 0,
           data.thi || null,
           data.lethargy_alert || 0,
           data.dominant_activity_state ?? 'Resting',
+          data.max_temp ?? null,
+          data.max_thi ?? null,
+          data.fever_event_count ?? 0,
+          data.heat_stress_event_count ?? 0,
+          data.severe_heat_event_count ?? 0,
+          data.true_eating_event_count ?? 0,
+          data.resting_ratio ?? 0,
+          data.standing_ratio ?? 0,
+          data.distress_ratio ?? 0,
+          data.feeding_schedule_adherence ?? 0,
+          data.high_risk_hour_flag ?? 0,
         ]
       );
       console.log('✅ Hourly aggregate upserted');
@@ -1052,6 +1212,50 @@ class DatabaseService {
     }
   }
 
+  async upsertFeedingSchedule(data: FeedingSchedule): Promise<void> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) throw new Error('Database connection is null');
+
+      await this.db.runAsync(
+        `INSERT INTO feeding_schedules
+         (pig_id, feedings_per_day, feeding_times, feeding_window_before_minutes, feeding_window_after_minutes)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(pig_id) DO UPDATE SET
+           feedings_per_day = excluded.feedings_per_day,
+           feeding_times = excluded.feeding_times,
+           feeding_window_before_minutes = excluded.feeding_window_before_minutes,
+           feeding_window_after_minutes = excluded.feeding_window_after_minutes,
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          data.pig_id,
+          data.feedings_per_day,
+          data.feeding_times,
+          data.feeding_window_before_minutes,
+          data.feeding_window_after_minutes,
+        ]
+      );
+    } catch (error) {
+      console.error('❌ Error upserting feeding schedule:', error);
+      throw error;
+    }
+  }
+
+  async getFeedingSchedule(pigId: string): Promise<any | null> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) return null;
+      const result = await this.db.getFirstAsync(
+        `SELECT * FROM feeding_schedules WHERE pig_id = ? LIMIT 1`,
+        [pigId]
+      );
+      return result || null;
+    } catch (error) {
+      console.error('❌ Error getting feeding schedule:', error);
+      return null;
+    }
+  }
+
   /**
    * Close database connection
    */
@@ -1066,4 +1270,4 @@ class DatabaseService {
 
 // Export singleton instance
 export const dbService = new DatabaseService();
-export type { SensorData, HourlyAggregate, HourlyInsight, DailyAssessment };
+export type { SensorData, HourlyAggregate, HourlyInsight, DailyAssessment, FeedingSchedule };

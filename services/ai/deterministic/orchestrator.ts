@@ -1,12 +1,6 @@
 import type { AIProviderName } from '../../core/config';
 import { dbService } from '../../storage/db/client';
 import {
-  evaluateDiagnosticHierarchy,
-  evaluateDiagnosticHierarchyFromHourlyAggregate,
-  type DiagnosticResult,
-} from '../../diagnostics/decisionTreeService';
-import type { SensorDataPoint } from '../../core/types';
-import {
   buildDailyPrompt,
   buildFallbackHourlyInsight,
   buildHourlyPrompt,
@@ -48,12 +42,6 @@ const severityRank: Record<'normal' | 'warning' | 'critical', number> = {
   critical: 2,
 };
 
-const mapRuleSeverity = (result: DiagnosticResult): 'normal' | 'warning' | 'critical' => {
-  if (result.severity === 'alert') return 'critical';
-  if (result.severity === 'warning') return 'warning';
-  return 'normal';
-};
-
 const maxSeverity = (
   a: 'normal' | 'warning' | 'critical',
   b: 'normal' | 'warning' | 'critical'
@@ -69,17 +57,6 @@ const maxOverallStatus = (
   a: 'normal' | 'watch' | 'critical',
   b: 'normal' | 'watch' | 'critical'
 ): 'normal' | 'watch' | 'critical' => (statusRank[a] >= statusRank[b] ? a : b);
-
-const toSensorDataPoints = (rows: any[]): SensorDataPoint[] =>
-  rows.map((row: any) => ({
-    timestamp: Number(row.timestamp ?? Date.now()),
-    temp: Number(row.temp ?? 0),
-    envTemp: Number(row.env_temp ?? 0),
-    humidity: Number(row.humidity ?? 0),
-    activityIntensity: Number(row.activity_intensity ?? 0),
-    pitchAngle: Number(row.pitch_angle ?? 0),
-    feed: Number(row.feed ?? 0),
-  }));
 
 interface ProviderCallResult {
   parsed: unknown | null;
@@ -202,6 +179,43 @@ export interface BackfillDeterministicV2Progress {
   label: string;
 }
 
+const inferAnalyticsSeverity = (aggregate: any): 'normal' | 'warning' | 'critical' => {
+  const severeHeat = Number(aggregate.severe_heat_event_count ?? 0) > 0 || Number(aggregate.max_thi ?? 0) > 79;
+  const fever = Number(aggregate.fever_event_count ?? 0) > 0 || Number(aggregate.max_temp ?? 0) > 39.5;
+  const heatStress = Number(aggregate.heat_stress_event_count ?? 0) > 0 || Number(aggregate.thi ?? 0) >= 75;
+  const lethargy = Number(aggregate.lethargy_alert ?? 0) === 1;
+
+  if (severeHeat || (fever && heatStress)) return 'critical';
+  if (fever || heatStress || lethargy) return 'warning';
+  return 'normal';
+};
+
+const buildAnalyticsContext = (aggregate: any) => {
+  const severity = inferAnalyticsSeverity(aggregate);
+  if (severity === 'critical') {
+    return {
+      label: 'high-risk-hour',
+      severity,
+      title: 'High-risk analytics hour',
+      description: 'Aggregated metrics show severe heat stress or fever events during this hour.',
+    };
+  }
+  if (severity === 'warning') {
+    return {
+      label: 'watch-hour',
+      severity,
+      title: 'Watchlist analytics hour',
+      description: 'Aggregated metrics show elevated stress indicators that need monitoring.',
+    };
+  }
+  return {
+    label: 'stable-hour',
+    severity,
+    title: 'Stable analytics hour',
+    description: 'Aggregated metrics remained within expected limits for this hour.',
+  };
+};
+
 export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: number): Promise<void> => {
   const bucketDate = getLocalDateString(bucketStartMs);
   const bucketHour = new Date(bucketStartMs).getHours();
@@ -210,20 +224,8 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
 
   if (!aggregate) return;
 
-  const bucketEndMs = bucketStartMs + HOUR_MS - 1;
-  const rawRows = await dbService.getSensorData(bucketStartMs, bucketEndMs, pigId);
-  const rawPoints = toSensorDataPoints(rawRows);
-  const ruleResult =
-    rawPoints.length > 0
-      ? evaluateDiagnosticHierarchy(rawPoints)
-      : evaluateDiagnosticHierarchyFromHourlyAggregate(aggregate);
-  const ruleSeverity = mapRuleSeverity(ruleResult);
-  const ruleContext = {
-    case: ruleResult.case,
-    severity: ruleSeverity,
-    title: ruleResult.title,
-    description: ruleResult.description,
-  };
+  const ruleContext = buildAnalyticsContext(aggregate);
+  const ruleSeverity = ruleContext.severity;
 
   const sourceHash = hashString(
     JSON.stringify({
@@ -235,12 +237,17 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       mean_humidity: aggregate.mean_humidity,
       mean_activity: aggregate.mean_activity,
       mean_pitch: aggregate.mean_pitch,
-      mean_feed: aggregate.mean_feed,
       sample_count: aggregate.sample_count ?? 0,
       thi: aggregate.thi ?? null,
       lethargy_alert: aggregate.lethargy_alert ?? 0,
       dominant_activity_state: aggregate.dominant_activity_state ?? 'Resting',
-      rule_case: ruleResult.case,
+      max_temp: aggregate.max_temp ?? null,
+      max_thi: aggregate.max_thi ?? null,
+      fever_event_count: aggregate.fever_event_count ?? 0,
+      heat_stress_event_count: aggregate.heat_stress_event_count ?? 0,
+      severe_heat_event_count: aggregate.severe_heat_event_count ?? 0,
+      true_eating_event_count: aggregate.true_eating_event_count ?? 0,
+      rule_label: ruleContext.label,
       rule_severity: ruleSeverity,
     })
   );
@@ -282,7 +289,7 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       confidence: finalInsight.confidence,
       insight_json: JSON.stringify({
         ...finalInsight,
-        rule_case: ruleResult.case,
+        rule_label: ruleContext.label,
         rule_severity: ruleSeverity,
       }),
       source_hash: sourceHash,
@@ -291,9 +298,9 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       prompt_version: DETERMINISTIC_VERSIONS.HOURLY_PROMPT,
       model_version: providerModelVersion,
       status: 'success',
-      rule_case: ruleResult.case,
+      rule_case: ruleContext.label,
       rule_severity: ruleSeverity,
-      rule_reasoning_json: JSON.stringify(ruleResult.reasoning),
+      rule_reasoning_json: JSON.stringify(ruleContext),
       error_code: null,
       error_message: null,
     });
@@ -315,9 +322,9 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       prompt_version: DETERMINISTIC_VERSIONS.HOURLY_PROMPT,
       model_version: DETERMINISTIC_VERSIONS.MODEL,
       status: 'failed',
-      rule_case: ruleResult.case,
+      rule_case: ruleContext.label,
       rule_severity: ruleSeverity,
-      rule_reasoning_json: JSON.stringify(ruleResult.reasoning),
+      rule_reasoning_json: JSON.stringify(ruleContext),
       error_code: 'HOURLY_PIPELINE_ERROR',
       error_message: errorMsg,
     });
