@@ -1,4 +1,4 @@
-export type DeterministicProviderName = 'openai' | 'groq' | 'gemini';
+export type DeterministicProviderName = 'groq';
 
 export interface StructuredOutputRequest {
   system: string;

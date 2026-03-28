@@ -1,26 +1,13 @@
 import {
   getAIConfig,
-  hasGeminiApiKey,
   hasGroqApiKey,
-  hasOpenAIApiKey,
   type AIProviderName,
 } from '../../core/config';
 import type { DeterministicLLMProvider } from './contracts';
-import { OpenAIDeterministicProvider } from './openaiDeterministicProvider';
 import { GroqDeterministicProvider } from './groqDeterministicProvider';
-import { GeminiDeterministicProvider } from './geminiDeterministicProvider';
 
 const createProvider = (name: AIProviderName): DeterministicLLMProvider => {
-  switch (name) {
-    case 'openai':
-      return new OpenAIDeterministicProvider();
-    case 'groq':
-      return new GroqDeterministicProvider();
-    case 'gemini':
-      return new GeminiDeterministicProvider();
-    default:
-      return new OpenAIDeterministicProvider();
-  }
+  return new GroqDeterministicProvider();
 };
 
 const uniqueProviders = (names: AIProviderName[]): AIProviderName[] => {
@@ -33,9 +20,7 @@ const uniqueProviders = (names: AIProviderName[]): AIProviderName[] => {
 };
 
 const isProviderAvailable = (provider: AIProviderName): boolean => {
-  if (provider === 'openai') return hasOpenAIApiKey();
-  if (provider === 'groq') return hasGroqApiKey();
-  return hasGeminiApiKey();
+  return provider === 'groq' && hasGroqApiKey();
 };
 
 export const getDeterministicProviderOrder = (): AIProviderName[] => {
@@ -54,13 +39,6 @@ export const getDeterministicProviderChain = (): DeterministicLLMProvider[] => {
 
 export const getDeterministicModelForProvider = (providerName: AIProviderName): string => {
   const config = getAIConfig();
-  return (
-    config.deterministicModelByProvider?.[providerName] ||
-    (providerName === 'openai'
-      ? 'gpt-4o-mini'
-      : providerName === 'groq'
-        ? 'llama-3.3-70b-versatile'
-        : 'gemini-1.5-flash')
-  );
+  return config.deterministicModelByProvider?.[providerName] || 'llama-3.3-70b-versatile';
 };
 

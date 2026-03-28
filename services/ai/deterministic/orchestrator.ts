@@ -10,13 +10,15 @@ import {
   buildDailyPrompt,
   buildFallbackHourlyInsight,
   buildHourlyPrompt,
+  buildResolvedDailyAssessment,
+  buildResolvedHourlyInsight,
   DETERMINISTIC_VERSIONS,
 } from './promptBuilder';
 import {
-  parseDailyAssessmentV1,
-  parseHourlyInsightV1,
-  type DailyAssessmentV1,
-  type HourlyInsightV1,
+  parseDailyAssessmentV2,
+  parseHourlyInsightV2,
+  type DailyAssessmentV2,
+  type HourlyInsightV2,
 } from './contracts';
 import { getDeterministicModelForProvider, getDeterministicProviderChain } from '../providers/providerFactory';
 
@@ -106,7 +108,7 @@ const runDeterministicStructured = async (
         schema,
         model,
         temperature: 0.1,
-        maxTokens: 260,
+        maxTokens: 420,
       });
       return {
         parsed: result.parsed,
@@ -129,33 +131,76 @@ const HOURLY_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    schema_version: { type: 'string', const: 'hourly_insight_v1' },
+    schema_version: { type: 'string', const: 'hourly_insight_v2' },
     severity: { type: 'string', enum: ['normal', 'warning', 'critical'] },
     summary: { type: 'string' },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
-    key_signals: {
-      type: 'array',
-      items: { type: 'string' },
-    },
+    probable_issue: { type: 'string' },
+    key_evidence: { type: 'array', items: { type: 'string' } },
+    differential_considerations: { type: 'array', items: { type: 'string' } },
+    immediate_actions: { type: 'array', items: { type: 'string' } },
+    escalation_triggers: { type: 'array', items: { type: 'string' } },
+    uncertainty_notes: { type: 'array', items: { type: 'string' } },
   },
-  required: ['schema_version', 'severity', 'summary', 'confidence', 'key_signals'],
+  required: [
+    'schema_version',
+    'severity',
+    'summary',
+    'confidence',
+    'probable_issue',
+    'key_evidence',
+    'differential_considerations',
+    'immediate_actions',
+    'escalation_triggers',
+    'uncertainty_notes',
+  ],
 };
 
 const DAILY_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    schema_version: { type: 'string', const: 'daily_assessment_v1' },
+    schema_version: { type: 'string', const: 'daily_assessment_v2' },
     overall_status: { type: 'string', enum: ['normal', 'watch', 'critical'] },
     summary: { type: 'string' },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
-    key_observations: {
-      type: 'array',
-      items: { type: 'string' },
-    },
+    probable_issue: { type: 'string' },
+    key_evidence: { type: 'array', items: { type: 'string' } },
+    differential_considerations: { type: 'array', items: { type: 'string' } },
+    immediate_actions: { type: 'array', items: { type: 'string' } },
+    monitor_next_24h: { type: 'array', items: { type: 'string' } },
+    escalation_triggers: { type: 'array', items: { type: 'string' } },
+    uncertainty_notes: { type: 'array', items: { type: 'string' } },
   },
-  required: ['schema_version', 'overall_status', 'summary', 'confidence', 'key_observations'],
+  required: [
+    'schema_version',
+    'overall_status',
+    'summary',
+    'confidence',
+    'probable_issue',
+    'key_evidence',
+    'differential_considerations',
+    'immediate_actions',
+    'monitor_next_24h',
+    'escalation_triggers',
+    'uncertainty_notes',
+  ],
 };
+
+export interface BackfillDeterministicV2Result {
+  pigId: string;
+  startDate: string;
+  endDate: string;
+  hourlyBucketsProcessed: number;
+  dailyDaysProcessed: number;
+}
+
+export interface BackfillDeterministicV2Progress {
+  stage: 'hourly' | 'daily' | 'complete';
+  current: number;
+  total: number;
+  label: string;
+}
 
 export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: number): Promise<void> => {
   const bucketDate = getLocalDateString(bucketStartMs);
@@ -173,6 +218,12 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       ? evaluateDiagnosticHierarchy(rawPoints)
       : evaluateDiagnosticHierarchyFromHourlyAggregate(aggregate);
   const ruleSeverity = mapRuleSeverity(ruleResult);
+  const ruleContext = {
+    case: ruleResult.case,
+    severity: ruleSeverity,
+    title: ruleResult.title,
+    description: ruleResult.description,
+  };
 
   const sourceHash = hashString(
     JSON.stringify({
@@ -195,13 +246,8 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
   );
 
   try {
-    const { system, user, context } = buildHourlyPrompt(aggregate, {
-      case: ruleResult.case,
-      severity: ruleSeverity,
-      title: ruleResult.title,
-      description: ruleResult.description,
-    });
-    let parsed: HourlyInsightV1 | null = null;
+    const { system, user, context } = buildHourlyPrompt(aggregate, ruleContext);
+    let parsed: HourlyInsightV2 | null = null;
     let providerModelVersion: string = DETERMINISTIC_VERSIONS.MODEL;
 
     try {
@@ -212,17 +258,18 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
         DETERMINISTIC_VERSIONS.HOURLY_SCHEMA,
         HOURLY_SCHEMA
       );
-      parsed = parseHourlyInsightV1(modelResult.parsed);
+      parsed = parseHourlyInsightV2(modelResult.parsed);
       providerModelVersion = `${modelResult.provider}:${modelResult.model}`;
     } catch {
       // fall through to local deterministic fallback
     }
 
     if (!parsed) {
-      parsed = buildFallbackHourlyInsight(aggregate);
+      parsed = buildFallbackHourlyInsight(aggregate, ruleContext);
     }
 
     const resolvedSeverity = maxSeverity(ruleSeverity, parsed.severity);
+    const finalInsight = buildResolvedHourlyInsight(aggregate, resolvedSeverity, ruleContext, parsed);
 
     await dbService.upsertHourlyInsight({
       pig_id: pigId,
@@ -230,12 +277,11 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       bucket_end: bucketStartMs + HOUR_MS - 1,
       bucket_date: bucketDate,
       bucket_hour: bucketHour,
-      severity: resolvedSeverity,
-      summary: parsed.summary,
-      confidence: parsed.confidence,
+      severity: finalInsight.severity,
+      summary: finalInsight.summary,
+      confidence: finalInsight.confidence,
       insight_json: JSON.stringify({
-        ...parsed,
-        severity: resolvedSeverity,
+        ...finalInsight,
         rule_case: ruleResult.case,
         rule_severity: ruleSeverity,
       }),
@@ -262,7 +308,7 @@ export const runHourlyInsightForBucket = async (pigId: string, bucketStartMs: nu
       severity: 'warning',
       summary: 'Failed to generate hourly deterministic insight.',
       confidence: null,
-      insight_json: JSON.stringify({ schema_version: 'hourly_insight_v1', error: errorMsg }),
+      insight_json: JSON.stringify({ schema_version: 'hourly_insight_v2', error: errorMsg }),
       source_hash: sourceHash,
       source_hourly_aggregate_id: aggregate.id ?? null,
       schema_version: DETERMINISTIC_VERSIONS.HOURLY_SCHEMA,
@@ -311,10 +357,11 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
       rule_severity: row.rule_severity ?? row.severity,
       summary: row.summary,
       confidence: row.confidence ?? 0.5,
+      insight_json: row.insight_json ?? null,
     }));
     const { system, user, context } = buildDailyPrompt(pigId, bucketDay, compactRows);
 
-    let parsed: DailyAssessmentV1 | null = null;
+    let parsed: DailyAssessmentV2 | null = null;
     let providerModelVersion: string = DETERMINISTIC_VERSIONS.MODEL;
 
     try {
@@ -325,45 +372,27 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
         DETERMINISTIC_VERSIONS.DAILY_SCHEMA,
         DAILY_SCHEMA
       );
-      parsed = parseDailyAssessmentV1(modelResult.parsed);
+      parsed = parseDailyAssessmentV2(modelResult.parsed);
       providerModelVersion = `${modelResult.provider}:${modelResult.model}`;
     } catch {
       // fallback to rule-based daily
     }
 
     if (!parsed) {
-      const overall_status = baselineOverallStatus;
-      parsed = {
-        schema_version: 'daily_assessment_v1',
-        overall_status,
-        summary:
-          overall_status === 'critical'
-            ? 'Daily assessment: critical events were observed.'
-            : overall_status === 'watch'
-              ? 'Daily assessment: warnings observed; continue close monitoring.'
-              : 'Daily assessment: stable day with no major anomalies.',
-        confidence: 0.76,
-        key_observations: [
-          `success_hours=${successful.length}`,
-          `rule_critical_hours=${ruleCriticalCount}`,
-          `rule_warning_hours=${ruleWarningCount}`,
-        ],
-      };
+      parsed = buildResolvedDailyAssessment(bucketDay, compactRows, baselineOverallStatus);
     }
 
-    parsed = {
-      ...parsed,
-      overall_status: maxOverallStatus(parsed.overall_status, baselineOverallStatus),
-    };
+    const finalStatus = maxOverallStatus(parsed.overall_status, baselineOverallStatus);
+    const finalAssessment = buildResolvedDailyAssessment(bucketDay, compactRows, finalStatus, parsed);
 
     await dbService.upsertDailyAssessment({
       pig_id: pigId,
       bucket_day: bucketDay,
       day_start: dayStart,
       day_end: dayEnd,
-      overall_status: parsed.overall_status,
-      summary: parsed.summary,
-      assessment_json: JSON.stringify(parsed),
+      overall_status: finalAssessment.overall_status,
+      summary: finalAssessment.summary,
+      assessment_json: JSON.stringify(finalAssessment),
       source_hourly_count: successful.length,
       source_hash: sourceHash,
       schema_version: DETERMINISTIC_VERSIONS.DAILY_SCHEMA,
@@ -382,7 +411,7 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
       day_end: dayEnd,
       overall_status: 'watch',
       summary: 'Failed to generate daily deterministic assessment.',
-      assessment_json: JSON.stringify({ schema_version: 'daily_assessment_v1', error: errorMsg }),
+      assessment_json: JSON.stringify({ schema_version: 'daily_assessment_v2', error: errorMsg }),
       source_hourly_count: successful.length,
       source_hash: sourceHash,
       schema_version: DETERMINISTIC_VERSIONS.DAILY_SCHEMA,
@@ -393,4 +422,64 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
       error_message: errorMsg,
     });
   }
+};
+
+export const backfillDeterministicInsightsV2 = async (
+  pigId: string,
+  startDate = '1970-01-01',
+  endDate = '9999-12-31',
+  onProgress?: (progress: BackfillDeterministicV2Progress) => void
+): Promise<BackfillDeterministicV2Result> => {
+  const aggregates = await dbService.getHourlyAggregates(startDate, endDate, pigId);
+  const uniqueHours = new Map<string, { date: string; hour: number }>();
+
+  for (const row of aggregates) {
+    const date = String(row?.date ?? '');
+    const hour = Number(row?.hour ?? NaN);
+    if (!date || !Number.isFinite(hour)) continue;
+    uniqueHours.set(`${date}-${hour}`, { date, hour });
+  }
+
+  const orderedHours = [...uniqueHours.values()].sort((a, b) =>
+    `${a.date}-${String(a.hour).padStart(2, '0')}`.localeCompare(`${b.date}-${String(b.hour).padStart(2, '0')}`)
+  );
+
+  for (let index = 0; index < orderedHours.length; index++) {
+    const item = orderedHours[index];
+    onProgress?.({
+      stage: 'hourly',
+      current: index + 1,
+      total: orderedHours.length,
+      label: `${item.date} ${String(item.hour).padStart(2, '0')}:00`,
+    });
+    const bucketStartMs = new Date(`${item.date}T00:00:00`).getTime() + (item.hour * HOUR_MS);
+    await runHourlyInsightForBucket(pigId, bucketStartMs);
+  }
+
+  const uniqueDays = [...new Set(orderedHours.map((item) => item.date))].sort((a, b) => a.localeCompare(b));
+  for (let index = 0; index < uniqueDays.length; index++) {
+    const day = uniqueDays[index];
+    onProgress?.({
+      stage: 'daily',
+      current: index + 1,
+      total: uniqueDays.length,
+      label: day,
+    });
+    await runDailyAssessmentForDay(pigId, day);
+  }
+
+  onProgress?.({
+    stage: 'complete',
+    current: uniqueDays.length,
+    total: uniqueDays.length,
+    label: `${pigId} ${startDate} to ${endDate}`,
+  });
+
+  return {
+    pigId,
+    startDate,
+    endDate,
+    hourlyBucketsProcessed: orderedHours.length,
+    dailyDaysProcessed: uniqueDays.length,
+  };
 };

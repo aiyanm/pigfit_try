@@ -69,14 +69,14 @@ export const testGroqSetup = async (): Promise<void> => {
     log('\nStep 4: Checking provider configuration...');
     const aiConfig = getAIConfig();
     info(`Primary provider: ${aiConfig.deterministicPrimaryProvider}`);
-    info(`Fallback providers: ${aiConfig.deterministicFallbackProviders.join(', ')}`);
+    info(`Fallback providers: ${aiConfig.deterministicFallbackProviders.join(', ') || '(none)'}`);
     info(`Groq model: ${aiConfig.deterministicModelByProvider?.groq}`);
 
-    if (!aiConfig.deterministicFallbackProviders.includes('groq')) {
-      error('Groq is not in fallback providers!');
+    if (aiConfig.deterministicPrimaryProvider !== 'groq') {
+      error('Groq is not configured as the primary provider!');
       process.exit(1);
     }
-    success('Groq is properly configured as fallback provider');
+    success('Groq is properly configured as the active provider');
 
     // Step 5: Test provider instantiation
     log('\nStep 5: Creating Groq provider instance...');
@@ -126,7 +126,7 @@ export const testGroqSetup = async (): Promise<void> => {
     console.log('🎯 Next steps:');
     console.log('   1. Replace placeholder API key in .env with your actual Groq key');
     console.log('   2. Run: npm start (to restart with new environment variables)');
-    console.log('   3. Groq will automatically be used as fallback when OpenAI fails\n');
+    console.log('   3. Groq will be used for deterministic insights\n');
 
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

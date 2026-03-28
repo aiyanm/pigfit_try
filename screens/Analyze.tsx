@@ -15,11 +15,16 @@ import {
   DiagnosticResult,
   SensorDataPoint,
   evaluateDiagnosticHierarchy,
+  backfillDeterministicInsightsV2,
   getDatabaseStats,
   getDeterministicInsights,
   loadSensorData,
   loadTrendData,
+  parseDailyAssessment,
+  parseHourlyInsight,
   runDailyAssessmentForDay,
+  toDailyAssessmentDisplayData,
+  toHourlyInsightDisplayData,
 } from '../services';
 import { runDeterministicSchemaTests } from '../services/dev/tests/testDeterministicSchema';
 
@@ -27,6 +32,7 @@ const { width } = Dimensions.get('window');
 
 type PigId = 'LIVE-PIG-01' | 'LIVE-PIG-02' | 'LIVE-PIG-03';
 type TrendPeriod = '30m' | '1h' | '4h' | '12h';
+type BackfillRangePreset = '7d' | '30d' | 'all';
 const MIN_HOURLY_INSIGHTS_FOR_DAILY = 8;
 
 // UI Configuration for each diagnostic case
@@ -40,6 +46,78 @@ const CASE_UI_CONFIG: Record<string, {
   D: { iconBg: 'bg-blue-100', iconText: 'text-blue-600', symbol: 'ℹ', badgeBg: 'bg-blue-100', badgeText: 'text-blue-700', label: 'Info' },
   E: { iconBg: 'bg-yellow-100', iconText: 'text-yellow-600', symbol: '●', badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
   normal: { iconBg: 'bg-green-100', iconText: 'text-green-600', symbol: '✓', badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
+};
+
+const INSIGHT_STATUS_UI: Record<string, { badgeBg: string; badgeText: string; label: string }> = {
+  normal: { badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
+  warning: { badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
+  watch: { badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Watch' },
+  critical: { badgeBg: 'bg-red-100', badgeText: 'text-red-700', label: 'Critical' },
+};
+
+const formatInsightHourLabel = (hour: number): string => {
+  const normalized = ((hour % 24) + 24) % 24;
+  const suffix = normalized >= 12 ? 'PM' : 'AM';
+  const twelveHour = normalized % 12 === 0 ? 12 : normalized % 12;
+  return `${twelveHour}:00 ${suffix}`;
+};
+
+const parseJsonSafely = (value: unknown): any | null => {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const fallbackProbableIssue = (summary?: string | null): string => {
+  const text = summary?.trim();
+  if (!text) return 'Assessment pending';
+  if (/critical/i.test(text)) return 'Critical stress pattern detected';
+  if (/warning|watch/i.test(text)) return 'Stress indicators need monitoring';
+  return 'No clear health concern detected';
+};
+
+const fallbackActionsForStatus = (status: string): string[] => {
+  if (status === 'critical') {
+    return ['Move to a cooler area', 'Improve airflow and water access', 'Recheck within 1 hour'];
+  }
+  if (status === 'warning' || status === 'watch') {
+    return ['Monitor closely on the next check', 'Reduce heat exposure', 'Recheck activity and temperature'];
+  }
+  return ['Continue routine monitoring', 'Keep ventilation and water access stable'];
+};
+
+const fallbackEscalationForStatus = (status: string): string => {
+  if (status === 'critical') return 'Call the vet now if weakness, collapse, or breathing difficulty appears';
+  if (status === 'warning' || status === 'watch') return 'Call the vet today if warning signs persist or worsen';
+  return 'Continue monitoring and call the vet if a new warning pattern appears';
+};
+
+const formatDateOnly = (date: Date): string => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const getBackfillDateRange = (preset: BackfillRangePreset): { startDate: string; endDate: string; label: string } => {
+  const now = new Date();
+  const endDate = formatDateOnly(now);
+
+  if (preset === 'all') {
+    return { startDate: '1970-01-01', endDate, label: 'All history' };
+  }
+
+  const days = preset === '7d' ? 7 : 30;
+  const start = new Date(now);
+  start.setDate(start.getDate() - (days - 1));
+  return {
+    startDate: formatDateOnly(start),
+    endDate,
+    label: preset === '7d' ? 'Last 7 days' : 'Last 30 days',
+  };
 };
 
 const Analyze = () => {
@@ -60,10 +138,63 @@ const Analyze = () => {
     dailyAssessment: any | null;
   } | null>(null);
   const [isGeneratingDaily, setIsGeneratingDaily] = useState(false);
+  const [isBackfillingInsights, setIsBackfillingInsights] = useState(false);
+  const [backfillRangePreset, setBackfillRangePreset] = useState<BackfillRangePreset>('30d');
+  const [backfillProgress, setBackfillProgress] = useState<{
+    stage: 'hourly' | 'daily' | 'complete';
+    current: number;
+    total: number;
+    label: string;
+  } | null>(null);
 
   const successfulHourlyInsights = useMemo(() => {
     const rows = deterministicData?.hourlyInsights ?? [];
     return rows.filter((row: any) => row?.status === 'success').length;
+  }, [deterministicData]);
+
+  const hourlyInsightCards = useMemo(() => {
+    const rows = (deterministicData?.hourlyInsights ?? [])
+      .filter((row: any) => row?.status === 'success')
+      .slice(-3)
+      .reverse();
+
+    return rows.map((row: any) => {
+      const parsed = parseHourlyInsight(parseJsonSafely(row?.insight_json));
+      const status = row?.severity ?? 'warning';
+      const display = toHourlyInsightDisplayData(parsed, {
+        status,
+        confidence: typeof row?.confidence === 'number' ? row.confidence : null,
+        probableIssue: fallbackProbableIssue(row?.summary),
+        evidence: [row?.summary ?? 'No evidence available'].filter(Boolean),
+        actions: fallbackActionsForStatus(status),
+        escalation: fallbackEscalationForStatus(status),
+      });
+
+      return {
+        id: String(row?.id ?? `${row?.bucket_start ?? 'hour'}-${row?.bucket_hour ?? 'x'}`),
+        title: formatInsightHourLabel(Number(row?.bucket_hour ?? 0)),
+        ...display,
+      };
+    });
+  }, [deterministicData]);
+
+  const dailyInsightCard = useMemo(() => {
+    const row = deterministicData?.dailyAssessment;
+    if (!row || row.status !== 'success') return null;
+
+    const parsed = parseDailyAssessment(parseJsonSafely(row.assessment_json));
+    const status = row?.overall_status ?? 'watch';
+    return {
+      id: `daily-${row.bucket_day}`,
+      title: row.bucket_day ? `Daily • ${row.bucket_day}` : 'Daily Assessment',
+      ...toDailyAssessmentDisplayData(parsed, {
+        status,
+        probableIssue: fallbackProbableIssue(row?.summary),
+        evidence: [row?.summary ?? 'No evidence available'].filter(Boolean),
+        actions: fallbackActionsForStatus(status),
+        escalation: fallbackEscalationForStatus(status),
+      }),
+    };
   }, [deterministicData]);
 
   const toLocalDateString = (ms: number): string => {
@@ -210,6 +341,107 @@ const Analyze = () => {
 
   const axisTextStyle = { fontSize: 10, color: '#666' };
 
+  const renderInsightCard = (
+    card: {
+      id: string;
+      title: string;
+      status: string;
+      confidence: number | null;
+      probableIssue: string;
+      evidence: string[];
+      actions: string[];
+      escalation: string;
+    },
+    empty?: boolean
+  ) => {
+    const ui = INSIGHT_STATUS_UI[card.status] ?? INSIGHT_STATUS_UI.watch;
+    return (
+      <View
+        key={card.id}
+        className={`w-72 bg-white rounded-xl border border-gray-200 p-4 mr-3 ${empty ? 'opacity-80' : ''}`}
+      >
+        <View className="flex-row justify-between items-start mb-3">
+          <View className="flex-1 pr-2">
+            <Text className="text-sm font-semibold text-gray-900">{card.title}</Text>
+            <Text className="text-xs text-gray-500 mt-1">
+              Confidence:{' '}
+              <Text className="font-semibold text-gray-700">
+                {card.confidence == null ? '--' : `${Math.round(card.confidence * 100)}%`}
+              </Text>
+            </Text>
+          </View>
+          <View className={`px-3 py-1 rounded-full ${ui.badgeBg}`}>
+            <Text className={`text-xs font-medium ${ui.badgeText}`}>{ui.label}</Text>
+          </View>
+        </View>
+
+        <Text className="text-xs text-gray-500 mb-1">Probable issue</Text>
+        <Text className="text-sm font-semibold text-gray-900 mb-3">{card.probableIssue}</Text>
+
+        <Text className="text-xs text-gray-500 mb-1">Top evidence</Text>
+        <View className="mb-3">
+          {card.evidence.slice(0, 3).map((item, index) => (
+            <Text key={`${card.id}-e-${index}`} className="text-xs text-gray-700 mb-1">
+              • {item}
+            </Text>
+          ))}
+        </View>
+
+        <Text className="text-xs text-gray-500 mb-1">Actions</Text>
+        <View className="mb-3">
+          {card.actions.slice(0, 3).map((item, index) => (
+            <Text key={`${card.id}-a-${index}`} className="text-xs text-gray-700 mb-1">
+              • {item}
+            </Text>
+          ))}
+        </View>
+
+        <Text className="text-xs text-gray-500 mb-1">Escalation</Text>
+        <Text className="text-xs text-gray-700">{card.escalation}</Text>
+      </View>
+    );
+  };
+
+  const handleBackfillDeterministicInsights = async () => {
+    if (isBackfillingInsights) return;
+    setIsBackfillingInsights(true);
+    setBackfillProgress(null);
+    try {
+      const range = getBackfillDateRange(backfillRangePreset);
+      const result = await backfillDeterministicInsightsV2(
+        selectedPig,
+        range.startDate,
+        range.endDate,
+        (progress) => {
+          setBackfillProgress(progress);
+          console.log(
+            `🗂️ Backfill ${progress.stage} ${progress.current}/${progress.total}: ${progress.label}`
+          );
+        }
+      );
+      await refreshDeterministicInsights(selectedPig);
+      Alert.alert(
+        'Backfill complete',
+        `Recomputed ${result.hourlyBucketsProcessed} hourly buckets and ${result.dailyDaysProcessed} daily assessments for ${selectedPig} (${range.label}).`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      Alert.alert('Backfill failed', message);
+    } finally {
+      setIsBackfillingInsights(false);
+      setBackfillProgress((current) =>
+        current
+          ? current
+          : {
+              stage: 'complete',
+              current: 0,
+              total: 0,
+              label: 'No backfill work was performed',
+            }
+      );
+    }
+  };
+
   return (
     <View className="flex-1 bg-gray-100">
       {/* Header */}
@@ -266,45 +498,92 @@ const Analyze = () => {
           </View>
         </View>
 
-        {/* Deterministic Insights Snapshot */}
-        <View className="bg-white mx-4 mb-3 rounded-xl p-4 border border-gray-200">
-          <Text className="text-sm font-semibold text-gray-900 mb-2">Deterministic Insights (Today)</Text>
-          <Text className="text-xs text-gray-500 mb-2">
-            Day: {deterministicData?.bucketDay || '--'}
-          </Text>
-          <Text className="text-xs text-gray-700 mb-1">
-            Hourly insights: {deterministicData?.hourlyInsights?.length ?? 0} (successful: {successfulHourlyInsights})
-          </Text>
-          <Text className="text-xs text-gray-700 mb-1">
-            Latest hourly: {deterministicData?.hourlyInsights?.length
-              ? deterministicData.hourlyInsights[deterministicData.hourlyInsights.length - 1].summary
-              : 'No hourly insight yet'}
-          </Text>
-          <Text className="text-xs text-gray-700">
-            Daily: {deterministicData?.dailyAssessment?.summary || 'No daily assessment yet'}
-          </Text>
-          <TouchableOpacity
-            className={`mt-3 rounded-lg px-3 py-2 ${
-              isGeneratingDaily || successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
-                ? 'bg-gray-300'
-                : 'bg-blue-600'
-            }`}
-            onPress={handleGenerateDailyInsight}
-            disabled={isGeneratingDaily || successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY}
-          >
-            <View className="flex-row items-center justify-center">
-              {isGeneratingDaily ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : null}
-              <Text className={`text-center text-xs font-semibold ${isGeneratingDaily ? 'ml-2 text-white' : 'text-white'}`}>
-                {isGeneratingDaily
-                  ? 'Generating daily insight...'
-                  : successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
-                    ? `Need ${MIN_HOURLY_INSIGHTS_FOR_DAILY}+ successful hourly insights`
-                    : 'Generate Daily Insight'}
+        {/* Hourly Insights */}
+        <View className="mt-1">
+          <View className="flex-row justify-between items-center px-4 py-3">
+            <View>
+              <Text className="text-lg font-bold text-gray-900">Hourly Insights</Text>
+              <Text className="text-xs text-gray-500">
+                {deterministicData?.bucketDay || '--'} • successful {successfulHourlyInsights}
               </Text>
             </View>
-          </TouchableOpacity>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingLeft: 16, paddingRight: 4 }}
+          >
+            {hourlyInsightCards.length > 0
+              ? hourlyInsightCards.map((card) => renderInsightCard(card))
+              : renderInsightCard(
+                  {
+                    id: 'hourly-empty',
+                    title: 'No hourly insight yet',
+                    status: 'watch',
+                    confidence: null,
+                    probableIssue: 'Waiting for a successful hourly assessment',
+                    evidence: ['No successful hourly insight is stored for this day yet'],
+                    actions: ['Collect more hourly data', 'Wait for the next completed hourly run'],
+                    escalation: 'Continue monitoring until a valid hourly insight is available',
+                  },
+                  true
+                )}
+          </ScrollView>
+        </View>
+
+        {/* Daily Insights */}
+        <View className="mt-4">
+          <View className="flex-row justify-between items-center px-4 py-3">
+            <View>
+              <Text className="text-lg font-bold text-gray-900">Daily Insights</Text>
+              <Text className="text-xs text-gray-500">
+                {deterministicData?.bucketDay || '--'} daily assessment
+              </Text>
+            </View>
+            <TouchableOpacity
+              className={`rounded-lg px-3 py-2 ${
+                isGeneratingDaily || successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
+                  ? 'bg-gray-300'
+                  : 'bg-blue-600'
+              }`}
+              onPress={handleGenerateDailyInsight}
+              disabled={isGeneratingDaily || successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY}
+            >
+              <View className="flex-row items-center justify-center">
+                {isGeneratingDaily ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : null}
+                <Text className={`text-center text-xs font-semibold ${isGeneratingDaily ? 'ml-2 text-white' : 'text-white'}`}>
+                  {isGeneratingDaily
+                    ? 'Generating...'
+                    : successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
+                      ? `Need ${MIN_HOURLY_INSIGHTS_FOR_DAILY}+ hourly`
+                      : 'Generate Daily'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingLeft: 16, paddingRight: 4 }}
+          >
+            {dailyInsightCard
+              ? renderInsightCard(dailyInsightCard)
+              : renderInsightCard(
+                  {
+                    id: 'daily-empty',
+                    title: 'No daily assessment yet',
+                    status: 'watch',
+                    confidence: null,
+                    probableIssue: 'Daily assessment pending',
+                    evidence: [`Need ${MIN_HOURLY_INSIGHTS_FOR_DAILY} successful hourly insights before generation`],
+                    actions: ['Wait for more hourly insights', 'Run the daily assessment once enough data is available'],
+                    escalation: 'Continue monitoring until the daily assessment is generated',
+                  },
+                  true
+                )}
+          </ScrollView>
         </View>
 
         {/* Trends Section */}
@@ -515,6 +794,59 @@ const Analyze = () => {
             >
               <Text className="text-white font-semibold text-sm">🔄 Refresh Stats</Text>
             </TouchableOpacity>
+
+            <View className="mt-3">
+              <Text className="text-xs font-semibold text-gray-700 mb-2">Backfill range</Text>
+              <View className="flex-row gap-2">
+                {(['7d', '30d', 'all'] as BackfillRangePreset[]).map((preset) => {
+                  const selected = backfillRangePreset === preset;
+                  const label = preset === '7d' ? '7 Days' : preset === '30d' ? '30 Days' : 'All';
+                  return (
+                    <TouchableOpacity
+                      key={preset}
+                      className={`px-3 py-1.5 rounded-full border ${
+                        selected ? 'bg-amber-50 border-amber-500' : 'bg-white border-gray-300'
+                      }`}
+                      onPress={() => setBackfillRangePreset(preset)}
+                      disabled={isBackfillingInsights}
+                    >
+                      <Text className={`text-xs font-medium ${selected ? 'text-amber-700' : 'text-gray-700'}`}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <TouchableOpacity
+              className={`py-2 rounded-lg items-center mt-3 ${
+                isBackfillingInsights ? 'bg-gray-400' : 'bg-amber-600'
+              }`}
+              onPress={handleBackfillDeterministicInsights}
+              disabled={isBackfillingInsights}
+            >
+              <Text className="text-white font-semibold text-sm">
+                {isBackfillingInsights
+                  ? 'Backfilling v2 Insights...'
+                  : `🗂️ Backfill ${selectedPig} to v2`}
+              </Text>
+            </TouchableOpacity>
+
+            {backfillProgress && (
+              <View className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <Text className="text-xs font-medium text-amber-800">
+                  {backfillProgress.stage === 'hourly'
+                    ? `Hourly backfill ${backfillProgress.current}/${backfillProgress.total}`
+                    : backfillProgress.stage === 'daily'
+                      ? `Daily backfill ${backfillProgress.current}/${backfillProgress.total}`
+                      : 'Backfill complete'}
+                </Text>
+                <Text className="text-[11px] text-amber-700 mt-1">
+                  {backfillProgress.label}
+                </Text>
+              </View>
+            )}
 
             {/* Deterministic schema test trigger */}
             <TouchableOpacity

@@ -6,8 +6,8 @@ import { getDeterministicProviderOrder } from '../ai/providers/providerFactory';
 export const initializeAppServices = async (): Promise<void> => {
   await dbService.initialize();
   initializeAIConfig({
-    deterministicPrimaryProvider: 'openai',
-    deterministicFallbackProviders: ['groq'],
+    deterministicPrimaryProvider: 'groq',
+    deterministicFallbackProviders: [],
   });
   const providerOrder = getDeterministicProviderOrder();
   logger.info(`Deterministic providers active: ${providerOrder.join(' -> ') || 'none'}`);

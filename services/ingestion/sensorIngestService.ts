@@ -317,9 +317,29 @@ export const getDeterministicInsights = async (pigId: string, bucketDay?: string
       dbService.getDailyAssessment(pigId, day),
     ]);
 
+    const dedupedHourly = [...hourly]
+      .sort((a: any, b: any) => {
+        const bucketDelta = Number(a.bucket_start ?? 0) - Number(b.bucket_start ?? 0);
+        if (bucketDelta !== 0) return bucketDelta;
+        const schemaA = String(a.schema_version ?? '');
+        const schemaB = String(b.schema_version ?? '');
+        return schemaB.localeCompare(schemaA);
+      })
+      .reduce((acc: any[], row: any) => {
+        const previous = acc[acc.length - 1];
+        if (previous && Number(previous.bucket_start) === Number(row.bucket_start)) {
+          if (String(row.schema_version ?? '').localeCompare(String(previous.schema_version ?? '')) > 0) {
+            acc[acc.length - 1] = row;
+          }
+          return acc;
+        }
+        acc.push(row);
+        return acc;
+      }, []);
+
     return {
       bucketDay: day,
-      hourlyInsights: hourly,
+      hourlyInsights: dedupedHourly,
       dailyAssessment: daily,
     };
   } catch (error) {

@@ -20,8 +20,8 @@ const TEST_DATE = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 const TEST_HOUR = new Date().getHours();
 const TEST_BUCKET_START = Date.now() - (Date.now() % (60 * 60 * 1000));
 const TEST_BUCKET_END = TEST_BUCKET_START + (60 * 60 * 1000) - 1;
-const TEST_PROMPT_VERSION = 'hourly_prompt_v1';
-const TEST_DAILY_PROMPT_VERSION = 'daily_prompt_v1';
+const TEST_PROMPT_VERSION = 'hourly_prompt_v2';
+const TEST_DAILY_PROMPT_VERSION = 'daily_prompt_v2';
 
 const assertTrue = (condition: boolean, message: string) => {
   if (!condition) {
@@ -76,7 +76,7 @@ export const testHourlyInsightsUpsert = async () => {
     insight_json: JSON.stringify({ risk: 'heat_stress', score: 0.73 }),
     source_hash: 'hash-hourly-v1',
     source_hourly_aggregate_id: null,
-    schema_version: 'hourly_insight_v1',
+    schema_version: 'hourly_insight_v2',
     prompt_version: TEST_PROMPT_VERSION,
     model_version: 'test-model-v1',
     status: 'success',
@@ -97,7 +97,7 @@ export const testHourlyInsightsUpsert = async () => {
     insight_json: JSON.stringify({ risk: 'high_fever', score: 0.91 }),
     source_hash: 'hash-hourly-v2',
     source_hourly_aggregate_id: null,
-    schema_version: 'hourly_insight_v1',
+    schema_version: 'hourly_insight_v2',
     prompt_version: TEST_PROMPT_VERSION,
     model_version: 'test-model-v1',
     status: 'success',
@@ -130,7 +130,7 @@ export const testDailyAssessmentUpsert = async () => {
     assessment_json: JSON.stringify({ trend: 'stable', confidence: 0.66 }),
     source_hourly_count: 4,
     source_hash: 'hash-daily-v1',
-    schema_version: 'daily_assessment_v1',
+    schema_version: 'daily_assessment_v2',
     prompt_version: TEST_DAILY_PROMPT_VERSION,
     model_version: 'test-model-v1',
     status: 'success',
@@ -148,7 +148,7 @@ export const testDailyAssessmentUpsert = async () => {
     assessment_json: JSON.stringify({ trend: 'worsening', confidence: 0.89 }),
     source_hourly_count: 8,
     source_hash: 'hash-daily-v2',
-    schema_version: 'daily_assessment_v1',
+    schema_version: 'daily_assessment_v2',
     prompt_version: TEST_DAILY_PROMPT_VERSION,
     model_version: 'test-model-v1',
     status: 'success',

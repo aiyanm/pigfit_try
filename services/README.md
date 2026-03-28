@@ -7,7 +7,7 @@ This folder uses a layered structure focused on readability and clear ownership.
 - `core/`: shared domain types and cross-cutting primitives.
 - `ingestion/`: sensor logging, retrieval, and aggregate refresh flows.
 - `diagnostics/`: deterministic health metrics and decision tree rules.
-- `ai/`: context building, prompt templates, and LLM analysis orchestration.
+- `ai/`: deterministic prompt building, provider orchestration, and insight contracts.
 - `storage/`: SQLite client and repository helpers.
 - `app/`: startup/bootstrap wiring.
 
@@ -16,7 +16,13 @@ This folder uses a layered structure focused on readability and clear ownership.
 For app/screen code, prefer the root barrel:
 
 ```ts
-import { analyzePigHealth, loadSensorData, evaluateDiagnosticHierarchy } from '../services';
+import {
+  backfillDeterministicInsightsV2,
+  evaluateDiagnosticHierarchy,
+  getDeterministicInsights,
+  loadSensorData,
+  runDailyAssessmentForDay,
+} from '../services';
 ```
 
 This keeps UI modules decoupled from internal file paths.
@@ -29,7 +35,8 @@ Keep root-level files minimal and intentional:
 - No legacy facades in root `services/*.ts`
 - Non-runtime code: place examples/tests under `dev/examples` and `dev/tests`
 
-## Naming Conventions
+## AI Architecture
 
-- Canonical API uses `analyzePigHealth` / `analyzePigHealthStream`.
-- Legacy aliases (`analyzepigHealth`, `analyzepigHealthStream`) remain temporarily for compatibility.
+- The runtime AI path is deterministic insights, not free-form RAG analysis.
+- Groq is the only configured deterministic provider.
+- Public AI exports are limited to deterministic contracts and orchestrator helpers.

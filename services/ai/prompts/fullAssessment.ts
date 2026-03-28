@@ -20,6 +20,8 @@ export const getFullVeterinaryAssessmentPrompt = (): AnalysisPrompt => ({
     'Farmers need: Is pig healthy? What\'s the problem? What do I do? When do I call you? ' +
     'Be clear, practical, and concise. No unnecessary medical details.',
 
+    //definisiton of column , expand! para dili maghalucinate !!!!!!!!!!!!!!!!!!!!!
+    //
   userPrompt:
     'Provide a complete health assessment:\n' +
     '\n' +
