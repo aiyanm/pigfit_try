@@ -34,19 +34,6 @@ type TrendPeriod = '30m' | '1h' | '4h' | '12h';
 type BackfillRangePreset = '7d' | '30d' | 'all';
 const MIN_HOURLY_INSIGHTS_FOR_DAILY = 8;
 
-// UI Configuration for each diagnostic case
-const CASE_UI_CONFIG: Record<string, {
-  iconBg: string; iconText: string; symbol: string;
-  badgeBg: string; badgeText: string; label: string;
-}> = {
-  A: { iconBg: 'bg-red-100', iconText: 'text-red-600', symbol: '!', badgeBg: 'bg-red-100', badgeText: 'text-red-700', label: 'Alert' },
-  B: { iconBg: 'bg-red-100', iconText: 'text-red-600', symbol: '!', badgeBg: 'bg-red-100', badgeText: 'text-red-700', label: 'Alert' },
-  C: { iconBg: 'bg-yellow-100', iconText: 'text-yellow-600', symbol: '●', badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
-  D: { iconBg: 'bg-blue-100', iconText: 'text-blue-600', symbol: 'ℹ', badgeBg: 'bg-blue-100', badgeText: 'text-blue-700', label: 'Info' },
-  E: { iconBg: 'bg-yellow-100', iconText: 'text-yellow-600', symbol: '●', badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
-  normal: { iconBg: 'bg-green-100', iconText: 'text-green-600', symbol: '✓', badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
-};
-
 const INSIGHT_STATUS_UI: Record<string, { badgeBg: string; badgeText: string; label: string }> = {
   normal: { badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
   warning: { badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
@@ -747,7 +734,7 @@ const Analyze = () => {
         </View>
 
 
-        {/* Events & Alerts Section — Driven by Hierarchical Decision Tree */}
+        {/* Events & Alerts Section */}
         <View className="bg-white mx-4 mt-4 p-4 rounded-xl border border-gray-200">
           <View className="flex-row justify-between items-center mb-4">
             <Text className="text-base font-bold text-gray-900">Events & Alerts</Text>

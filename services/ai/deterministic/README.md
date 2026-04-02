@@ -26,8 +26,7 @@ flowchart TD
     B --> C[finalizeHourlyAggregateBucket]
     C --> D[hourly_aggregates]
     D --> E[runHourlyInsightForBucket]
-    B --> E
-    E --> F[Rule evaluation]
+    E --> F[Analytics severity/context]
     E --> G[Structured provider call]
     G --> H{Valid hourly JSON?}
     H -- Yes --> I[buildResolvedHourlyInsight]
@@ -43,8 +42,9 @@ flowchart TD
     O -- No --> Q[Rule-based daily fallback]
     Q --> P
     P --> R[daily_assessments]
-    K --> S[Analyze screen]
-    R --> S
+    D --> S[Analyze screen analytics cards]
+    K --> T[Analyze screen insight cards]
+    R --> T
 ```
 
 ## Hourly Insight Schema
@@ -118,18 +118,13 @@ Defined in `DailyAssessmentV2` in `contracts.ts`.
 ```mermaid
 flowchart TD
     A[Closed hour detected] --> B[Load hourly aggregate]
-    B --> C[Load raw sensor points for same hour]
-    C --> D{Any raw points?}
-    D -- Yes --> E[evaluateDiagnosticHierarchy]
-    D -- No --> F[evaluateDiagnosticHierarchyFromHourlyAggregate]
-    E --> G[ruleSeverity]
-    F --> G
-    G --> H[buildHourlyPrompt]
+    B --> C[Infer analytics severity/context]
+    C --> H[buildHourlyPrompt]
     H --> I[Provider structured JSON attempt]
     I --> J{parseHourlyInsightV2 succeeds?}
     J -- Yes --> K[Use provider output]
     J -- No --> L[Use buildFallbackHourlyInsight]
-    K --> M[maxSeverity of rule and model]
+    K --> M[maxSeverity of analytics floor and model]
     L --> M
     M --> N[buildResolvedHourlyInsight]
     N --> O[Persist hourly_insights row]
@@ -143,12 +138,21 @@ The hourly pipeline uses:
 - `mean_humidity`
 - `mean_activity`
 - `mean_pitch`
-- `mean_feed`
 - `sample_count`
 - `thi`
+- `max_temp`
+- `max_thi`
+- `fever_event_count`
+- `heat_stress_event_count`
+- `severe_heat_event_count`
+- `true_eating_event_count`
+- `resting_ratio`
+- `standing_ratio`
+- `distress_ratio`
+- `feeding_schedule_adherence`
 - `lethargy_alert`
 - `dominant_activity_state`
-- rule metadata from the decision tree
+- analytics severity/context derived from aggregate metrics
 
 ### Hourly fallback behavior
 
@@ -180,12 +184,12 @@ flowchart TD
 
 ### Daily rollup rule
 
-The baseline status comes from the strongest hourly rule severity:
-- any hourly `critical` rule => daily `critical`
-- else any hourly `warning` rule => daily `watch`
+The baseline status comes from the strongest hourly analytics severity:
+- any hourly `critical` analytics severity => daily `critical`
+- else any hourly `warning` analytics severity => daily `watch`
 - else daily `normal`
 
-This is important: the model cannot reduce the daily status below the rule baseline.
+This is important: the model cannot reduce the daily status below the analytics baseline.
 
 ## What the UI Actually Shows
 
@@ -240,11 +244,16 @@ erDiagram
         float mean_humidity
         float mean_activity
         float mean_pitch
-        float mean_feed
         float thi
         int lethargy_alert
         int sample_count
         string dominant_activity_state
+        float max_temp
+        float max_thi
+        int fever_event_count
+        int heat_stress_event_count
+        int severe_heat_event_count
+        int true_eating_event_count
     }
 
     hourly_insights {
@@ -335,9 +344,9 @@ Use the insights in this order:
 ## Current Design Intent
 
 The system is built to be conservative:
-- rule-based severity acts as a floor
+- analytics-based severity acts as a floor
 - provider output can enrich wording and evidence
-- provider output is not allowed to downgrade below rule severity
+- provider output is not allowed to downgrade below the analytics severity floor
 - local fallbacks keep the pipeline usable even when provider calls fail
 
 That is a sound design choice for a health-monitoring workflow, but the daily evidence selection and threshold mismatch should be fixed to keep the explanation layer aligned with the severity layer.
