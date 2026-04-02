@@ -413,7 +413,7 @@ function useBLE(): BluetoothLowEnergyApi {
         humidity: view.getFloat32(10, true),
         activityIntensity: view.getFloat32(14, true), // Updated for Stage 1
         pitchAngle: view.getFloat32(18, true),        // Updated for Stage 1
-        feedingPostureDetected: view.getUint16(23, true) + (packet[25] / 100) > 0.1,
+        feedingPostureDetected: packet[22] === 1,
       };
 
       console.log("✅ Binary data parsed:", parsedData);
