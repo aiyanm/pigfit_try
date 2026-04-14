@@ -62,6 +62,16 @@ const formatNumber = (value: unknown, digits = 2): string => {
   return value.toFixed(digits);
 };
 
+const severityWeight: Record<Severity, number> = {
+  normal: 0,
+  warning: 1,
+  critical: 2,
+};
+
+const getDailyRowSeverity = (row: DailySourceRow): Severity => row.rule_severity ?? row.severity;
+
+const formatHourLabel = (hour: number): string => `hour_${String(hour).padStart(2, '0')}:00`;
+
 const getHourlyProbableIssue = (
   aggregate: HourlyAggregateLike,
   severity: Severity,
@@ -194,6 +204,18 @@ const buildHourlyUncertainty = (aggregate: HourlyAggregateLike): string[] => {
   return notes.slice(0, 3);
 };
 
+const inferFallbackHourlySeverity = (aggregate: HourlyAggregateLike): Severity => {
+  const severeHeat = Number(aggregate.severe_heat_event_count ?? 0) > 0 || Number(aggregate.max_thi ?? 0) > 79;
+  const fever = Number(aggregate.fever_event_count ?? 0) > 0 || Number(aggregate.max_temp ?? 0) > 39.5;
+  const heatStress = Number(aggregate.heat_stress_event_count ?? 0) > 0 || Number(aggregate.thi ?? 0) >= 75;
+  const lethargy = Number(aggregate.lethargy_alert ?? 0) === 1;
+  const lowActivity = Number(aggregate.mean_activity ?? 0) > 0 && Number(aggregate.mean_activity ?? 0) < 1.05;
+
+  if (severeHeat || (fever && heatStress)) return 'critical';
+  if (fever || heatStress || lethargy || lowActivity) return 'warning';
+  return 'normal';
+};
+
 export const buildResolvedHourlyInsight = (
   aggregate: HourlyAggregateLike,
   severity: Severity,
@@ -232,20 +254,61 @@ export const buildResolvedHourlyInsight = (
 const inferDailyProbableIssue = (hourlyInsights: DailySourceRow[], status: OverallStatus): string => {
   const criticalHours = hourlyInsights.filter((row) => (row.rule_severity ?? row.severity) === 'critical').length;
   const warningHours = hourlyInsights.filter((row) => (row.rule_severity ?? row.severity) === 'warning').length;
+  const totalHours = hourlyInsights.length;
 
   if (status === 'critical') {
-    return criticalHours > 1 ? 'Repeated critical stress periods' : 'Critical stress period observed';
+    if (criticalHours >= 3) return 'Sustained critical stress pattern';
+    if (criticalHours > 1) return 'Repeated critical stress periods';
+    if (warningHours >= Math.max(2, Math.floor(totalHours / 3))) return 'Critical hour with broader stress pattern';
+    return 'Critical stress period observed';
   }
   if (status === 'watch') {
-    return warningHours > 1 ? 'Recurring daytime stress pattern' : 'Intermittent warning signals';
+    if (warningHours >= Math.max(3, Math.floor(totalHours / 2))) return 'Sustained warning-level stress pattern';
+    if (warningHours > 1) return 'Recurring daytime stress pattern';
+    return 'Intermittent warning signals';
   }
   return 'No clear daily health concern detected';
+};
+
+const selectPriorityDailyRows = (hourlyInsights: DailySourceRow[]): DailySourceRow[] => {
+  if (hourlyInsights.length <= 2) {
+    return [...hourlyInsights].sort((a, b) => b.bucket_hour - a.bucket_hour);
+  }
+
+  const strongest = [...hourlyInsights].sort((a, b) => {
+    const severityDiff = severityWeight[getDailyRowSeverity(b)] - severityWeight[getDailyRowSeverity(a)];
+    if (severityDiff !== 0) return severityDiff;
+    const confidenceDiff = (b.confidence ?? 0) - (a.confidence ?? 0);
+    if (confidenceDiff !== 0) return confidenceDiff;
+    return b.bucket_hour - a.bucket_hour;
+  });
+
+  const latest = [...hourlyInsights].sort((a, b) => b.bucket_hour - a.bucket_hour);
+  const selected: DailySourceRow[] = [];
+  const seenHours = new Set<number>();
+
+  const take = (row: DailySourceRow) => {
+    if (selected.length >= 2) return;
+    if (seenHours.has(row.bucket_hour)) return;
+    selected.push(row);
+    seenHours.add(row.bucket_hour);
+  };
+
+  take(strongest[0]);
+  for (const row of latest) {
+    take(row);
+  }
+  for (const row of strongest) {
+    take(row);
+  }
+
+  return selected;
 };
 
 const buildDailyEvidence = (hourlyInsights: DailySourceRow[], status: OverallStatus): string[] => {
   const criticalHours = hourlyInsights.filter((row) => (row.rule_severity ?? row.severity) === 'critical').length;
   const warningHours = hourlyInsights.filter((row) => (row.rule_severity ?? row.severity) === 'warning').length;
-  const sorted = [...hourlyInsights].sort((a, b) => b.bucket_hour - a.bucket_hour);
+  const selectedRows = selectPriorityDailyRows(hourlyInsights);
 
   const evidence = [
     `successful_hourly_insights=${hourlyInsights.length}`,
@@ -253,8 +316,8 @@ const buildDailyEvidence = (hourlyInsights: DailySourceRow[], status: OverallSta
     `warning_hours=${warningHours}`,
   ];
 
-  for (const row of sorted.slice(0, 2)) {
-    evidence.push(`hour_${row.bucket_hour}:00 ${row.summary}`);
+  for (const row of selectedRows) {
+    evidence.push(`${formatHourLabel(row.bucket_hour)} ${row.summary}`);
   }
 
   if (status === 'normal') {
@@ -484,13 +547,6 @@ export const buildFallbackHourlyInsight = (
   aggregate: HourlyAggregateLike,
   rule: HourlyRuleContext
 ): HourlyInsightV2 => {
-  const severeHeat = Number(aggregate.thi ?? 0) >= 84;
-  const warningHeat = Number(aggregate.thi ?? 0) >= 79;
-  const lethargy = Number(aggregate.lethargy_alert ?? 0) === 1;
-
-  let severity: Severity = 'normal';
-  if (severeHeat || (warningHeat && lethargy)) severity = 'critical';
-  else if (warningHeat || lethargy) severity = 'warning';
-
+  const severity = inferFallbackHourlySeverity(aggregate);
   return buildResolvedHourlyInsight(aggregate, severity, rule);
 };
