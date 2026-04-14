@@ -18,6 +18,8 @@ import { getDeterministicModelForProvider, getDeterministicProviderChain } from 
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+export const MIN_SUCCESSFUL_HOURLY_INSIGHTS_FOR_DAILY = 8;
+const dailyGenerationInFlight = new Set<string>();
 
 const getLocalDateString = (ts: number): string => {
   const d = new Date(ts);
@@ -178,6 +180,12 @@ export interface BackfillDeterministicV2Progress {
   total: number;
   label: string;
 }
+
+export type DailyAssessmentRunResult =
+  | 'skipped_threshold'
+  | 'skipped_inflight'
+  | 'skipped_unchanged'
+  | 'generated';
 
 const inferAnalyticsSeverity = (aggregate: any): 'normal' | 'warning' | 'critical' => {
   const severeHeat = Number(aggregate.severe_heat_event_count ?? 0) > 0 || Number(aggregate.max_thi ?? 0) > 79;
@@ -428,6 +436,60 @@ export const runDailyAssessmentForDay = async (pigId: string, bucketDay: string)
       error_code: 'DAILY_PIPELINE_ERROR',
       error_message: errorMsg,
     });
+  }
+};
+
+const buildDailySourceMeta = (successfulRows: any[]) => {
+  const sourceHash = hashString(
+    JSON.stringify(
+      successfulRows.map((row: any) => ({
+        id: row.id,
+        hour: row.bucket_hour,
+        severity: row.severity,
+        rule_severity: row.rule_severity ?? row.severity,
+        summary: row.summary,
+      }))
+    )
+  );
+
+  return {
+    successfulCount: successfulRows.length,
+    sourceHash,
+  };
+};
+
+export const maybeRunDailyAssessmentForDay = async (
+  pigId: string,
+  bucketDay: string
+): Promise<DailyAssessmentRunResult> => {
+  const inFlightKey = `${pigId}:${bucketDay}`;
+  if (dailyGenerationInFlight.has(inFlightKey)) {
+    return 'skipped_inflight';
+  }
+
+  dailyGenerationInFlight.add(inFlightKey);
+  try {
+    const hourlyRows = await dbService.getHourlyInsightsByDate(pigId, bucketDay);
+    const successful = hourlyRows.filter((row: any) => row.status === 'success');
+    if (successful.length < MIN_SUCCESSFUL_HOURLY_INSIGHTS_FOR_DAILY) {
+      return 'skipped_threshold';
+    }
+
+    const { successfulCount, sourceHash } = buildDailySourceMeta(successful);
+    const existingDaily = await dbService.getDailyAssessment(pigId, bucketDay);
+    if (
+      existingDaily &&
+      existingDaily.status === 'success' &&
+      existingDaily.source_hash === sourceHash &&
+      Number(existingDaily.source_hourly_count ?? 0) === successfulCount
+    ) {
+      return 'skipped_unchanged';
+    }
+
+    await runDailyAssessmentForDay(pigId, bucketDay);
+    return 'generated';
+  } finally {
+    dailyGenerationInFlight.delete(inFlightKey);
   }
 };
 

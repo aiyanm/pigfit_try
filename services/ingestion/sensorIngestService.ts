@@ -4,6 +4,7 @@ import {
   classifyActivityState,
   tagSensorDataPoint,
 } from '../diagnostics/metricsService';
+import { maybeRunDailyAssessmentForDay, runHourlyInsightForBucket } from '../ai/deterministic/orchestrator';
 import { dbService } from '../storage/db/client';
 import type {
   FeedingSchedule,
@@ -90,6 +91,12 @@ const toStoredSensorRow = async (data: SensorDataPoint, deviceId: string, pigId:
     activity_intensity: tagged.activityIntensity,
     activity_state: tagged.activityState,
     pitch_angle: tagged.pitchAngle,
+    accel_x: tagged.accelX ?? null,
+    accel_y: tagged.accelY ?? null,
+    accel_z: tagged.accelZ ?? null,
+    gyro_x: tagged.gyroX ?? null,
+    gyro_y: tagged.gyroY ?? null,
+    gyro_z: tagged.gyroZ ?? null,
     feeding_posture_detected: tagged.feedingPostureDetected ? 1 : 0,
     env_temp: tagged.envTemp,
     humidity: tagged.humidity,
@@ -221,6 +228,12 @@ export const finalizeHourlyAggregateBucket = async (pigId: string, bucketStartMs
   }
 };
 
+export const processClosedHourBucket = async (pigId: string, bucketStartMs: number): Promise<void> => {
+  await finalizeHourlyAggregateBucket(pigId, bucketStartMs);
+  await runHourlyInsightForBucket(pigId, bucketStartMs);
+  await maybeRunDailyAssessmentForDay(pigId, toLocalDateString(bucketStartMs));
+};
+
 export const initializeLogger = async (): Promise<void> => {
   try {
     await dbService.initialize();
@@ -245,10 +258,10 @@ export const logSensorData = async (
     const lastSeenHourStart = lastSeenHourByPig.get(pigId);
 
     if (lastSeenHourStart === undefined) {
-      await finalizeHourlyAggregateBucket(pigId, previousHourStart);
+      await processClosedHourBucket(pigId, previousHourStart);
       lastSeenHourByPig.set(pigId, currentHourStart);
     } else if (currentHourStart > lastSeenHourStart) {
-      await finalizeHourlyAggregateBucket(pigId, lastSeenHourStart);
+      await processClosedHourBucket(pigId, lastSeenHourStart);
       lastSeenHourByPig.set(pigId, currentHourStart);
     } else if (currentHourStart < lastSeenHourStart) {
       lastSeenHourByPig.set(pigId, currentHourStart);
@@ -270,6 +283,12 @@ export const loadSensorData = async (periodHours: number, pigId?: string): Promi
       humidity: Number(record.humidity),
       activityIntensity: Number(record.activity_intensity),
       pitchAngle: Number(record.pitch_angle),
+      accelX: record.accel_x == null ? undefined : Number(record.accel_x),
+      accelY: record.accel_y == null ? undefined : Number(record.accel_y),
+      accelZ: record.accel_z == null ? undefined : Number(record.accel_z),
+      gyroX: record.gyro_x == null ? undefined : Number(record.gyro_x),
+      gyroY: record.gyro_y == null ? undefined : Number(record.gyro_y),
+      gyroZ: record.gyro_z == null ? undefined : Number(record.gyro_z),
       feedingPostureDetected: Number(record.feeding_posture_detected ?? 0) === 1,
       thi: record.thi == null ? undefined : Number(record.thi),
       feverFlag: Number(record.fever_flag ?? 0) === 1,

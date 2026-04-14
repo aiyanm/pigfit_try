@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const DB_SCHEMA_VERSION = 3;
+const DB_SCHEMA_VERSION = 4;
 
 interface SensorData {
   timestamp: number;
@@ -10,6 +10,12 @@ interface SensorData {
   activity_intensity: number;
   activity_state?: string;
   pitch_angle: number;
+  accel_x?: number | null;
+  accel_y?: number | null;
+  accel_z?: number | null;
+  gyro_x?: number | null;
+  gyro_y?: number | null;
+  gyro_z?: number | null;
   feeding_posture_detected: number;
   env_temp: number;
   humidity: number;
@@ -353,6 +359,12 @@ class DatabaseService {
           activity_intensity REAL NOT NULL,
           activity_state TEXT DEFAULT 'Resting/Lethargy',
           pitch_angle REAL NOT NULL,
+          accel_x REAL,
+          accel_y REAL,
+          accel_z REAL,
+          gyro_x REAL,
+          gyro_y REAL,
+          gyro_z REAL,
           feeding_posture_detected INTEGER DEFAULT 0,
           env_temp REAL NOT NULL,
           humidity REAL NOT NULL,
@@ -553,6 +565,12 @@ class DatabaseService {
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN within_feeding_window INTEGER DEFAULT 0`); } catch {}
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN true_eating_event INTEGER DEFAULT 0`); } catch {}
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN raw_risk_label TEXT DEFAULT 'normal'`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_x REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_y REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_z REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN gyro_x REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN gyro_y REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN gyro_z REAL`); } catch {}
 
       try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN max_temp REAL`); } catch {}
       try { await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN max_thi REAL`); } catch {}
@@ -703,8 +721,8 @@ class DatabaseService {
 
       await this.db.runAsync(
         `INSERT INTO sensor_data 
-         (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, feeding_posture_detected, env_temp, humidity, thi, fever_flag, lethargy_flag, heat_stress_flag, severe_heat_flag, within_feeding_window, true_eating_event, raw_risk_label) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z, feeding_posture_detected, env_temp, humidity, thi, fever_flag, lethargy_flag, heat_stress_flag, severe_heat_flag, within_feeding_window, true_eating_event, raw_risk_label) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           data.timestamp,
           data.device_id,
@@ -713,6 +731,12 @@ class DatabaseService {
           data.activity_intensity,
           data.activity_state ?? 'Resting/Lethargy',
           data.pitch_angle,
+          data.accel_x ?? null,
+          data.accel_y ?? null,
+          data.accel_z ?? null,
+          data.gyro_x ?? null,
+          data.gyro_y ?? null,
+          data.gyro_z ?? null,
           data.feeding_posture_detected,
           data.env_temp,
           data.humidity,
