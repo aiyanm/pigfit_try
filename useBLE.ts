@@ -20,13 +20,27 @@ const PIGFIT_DEVICE_NAME = "PigFit_Device";
 const PIGFIT_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 const PIGFIT_CHARACTERISTIC_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
 const PERIOD_AGG_REFRESH_BACKSTOP_MS = 30 * 1000;
+const PACKET_MAGIC_NUMBER = 0xaa;
+const PACKET_VERSION_V1 = 0x01;
+const PACKET_VERSION_V2 = 0x02;
+const LEGACY_PACKET_SIZE = 32;
+const RAW_AXES_PACKET_SIZE = 48;
+
+const calculateActivityIntensity = (accelX: number, accelY: number, accelZ: number): number =>
+  Math.sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
 
 interface PigFitData {
   temp: number;
   envTemp: number;
   humidity: number;
-  activityIntensity: number; // Processed on Arduino
-  pitchAngle: number;       // Processed on Arduino
+  activityIntensity: number;
+  pitchAngle: number;
+  accelX?: number;
+  accelY?: number;
+  accelZ?: number;
+  gyroX?: number;
+  gyroY?: number;
+  gyroZ?: number;
   feedingPostureDetected: boolean;
 }
 
@@ -259,7 +273,7 @@ function useBLE(): BluetoothLowEnergyApi {
       setConnectedDevice(deviceConnection);
       await deviceConnection.discoverAllServicesAndCharacteristics();
       
-      // Request MTU of 64 bytes to support 32-byte packets (+ overhead)
+      // Request MTU of 64 bytes to support both legacy and raw-axis packets (+ overhead)
       try {
         const mtu = await deviceConnection.requestMTU(64);
         console.log(`✅ MTU negotiated: ${mtu} bytes`);
@@ -374,12 +388,6 @@ function useBLE(): BluetoothLowEnergyApi {
     try {
       // Decode base64 to get raw bytes
       const rawData = base64.decode(characteristic.value);
-      
-      // Validate packet size
-      if (rawData.length !== 32) {
-        console.log(`❌ Invalid packet size: ${rawData.length} (expected 32)`);
-        return;
-      }
 
       // Parse binary packet
       const packet = new Uint8Array(rawData.length);
@@ -387,19 +395,39 @@ function useBLE(): BluetoothLowEnergyApi {
         packet[i] = rawData.charCodeAt(i);
       }
 
+      if (packet.length < 4) {
+        console.log(`❌ Packet too short: ${packet.length}`);
+        return;
+      }
+
       // Validate header
-      if (packet[0] !== 0xAA) {
+      if (packet[0] !== PACKET_MAGIC_NUMBER) {
         console.log("❌ Invalid magic number");
         return;
       }
-      if (packet[1] !== 0x01) {
-        console.log("❌ Invalid packet version");
+
+      const packetVersion = packet[1];
+      const expectedPacketSize =
+        packetVersion === PACKET_VERSION_V1
+          ? LEGACY_PACKET_SIZE
+          : packetVersion === PACKET_VERSION_V2
+            ? RAW_AXES_PACKET_SIZE
+            : 0;
+
+      if (expectedPacketSize === 0) {
+        console.log(`❌ Unsupported packet version: ${packetVersion}`);
+        return;
+      }
+
+      if (packet.length !== expectedPacketSize) {
+        console.log(`❌ Invalid packet size: ${packet.length} (expected ${expectedPacketSize})`);
         return;
       }
 
       // Validate CRC16
-      const receivedCRC = packet[30] | (packet[31] << 8);
-      const calculatedCRC = calculateCRC16(packet.slice(0, 30));
+      const crcOffset = packet.length - 2;
+      const receivedCRC = packet[crcOffset] | (packet[crcOffset + 1] << 8);
+      const calculatedCRC = calculateCRC16(packet.slice(0, crcOffset));
       if (receivedCRC !== calculatedCRC) {
         console.log("❌ CRC mismatch");
         return;
@@ -407,14 +435,34 @@ function useBLE(): BluetoothLowEnergyApi {
 
       // Parse data (little-endian)
       const view = new DataView(packet.buffer);
-      const parsedData: PigFitData = {
-        temp: view.getFloat32(2, true),
-        envTemp: view.getFloat32(6, true),
-        humidity: view.getFloat32(10, true),
-        activityIntensity: view.getFloat32(14, true), // Updated for Stage 1
-        pitchAngle: view.getFloat32(18, true),        // Updated for Stage 1
-        feedingPostureDetected: view.getUint16(23, true) + (packet[25] / 100) > 0.1,
-      };
+      const parsedData: PigFitData =
+        packetVersion === PACKET_VERSION_V2
+          ? {
+              temp: view.getFloat32(2, true),
+              envTemp: view.getFloat32(6, true),
+              humidity: view.getFloat32(10, true),
+              accelX: view.getFloat32(14, true),
+              accelY: view.getFloat32(18, true),
+              accelZ: view.getFloat32(22, true),
+              gyroX: view.getFloat32(26, true),
+              gyroY: view.getFloat32(30, true),
+              gyroZ: view.getFloat32(34, true),
+              pitchAngle: view.getFloat32(38, true),
+              activityIntensity: calculateActivityIntensity(
+                view.getFloat32(14, true),
+                view.getFloat32(18, true),
+                view.getFloat32(22, true)
+              ),
+              feedingPostureDetected: packet[42] === 1,
+            }
+          : {
+              temp: view.getFloat32(2, true),
+              envTemp: view.getFloat32(6, true),
+              humidity: view.getFloat32(10, true),
+              activityIntensity: view.getFloat32(14, true),
+              pitchAngle: view.getFloat32(18, true),
+              feedingPostureDetected: view.getUint16(22, true) + (packet[24] / 100) > 0.1,
+            };
 
       console.log("✅ Binary data parsed:", parsedData);
       setReceivedData(parsedData);

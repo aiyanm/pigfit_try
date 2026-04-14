@@ -24,9 +24,9 @@ const char *BLE_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 const char *BLE_CHARACTERISTIC_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
 
 // Binary packet constants
-#define PACKET_SIZE 32
+#define PACKET_SIZE 48
 #define MAGIC_NUMBER 0xAA
-#define PACKET_VERSION 0x01
+#define PACKET_VERSION 0x02
 
 // Create BLE Service and Characteristic
 BLEService pigFitService(BLE_SERVICE_UUID);
@@ -39,6 +39,9 @@ float humidity = 0.0f;
 float imu_accel_x = 0.0f;
 float imu_accel_y = 0.0f;
 float imu_accel_z = 0.0f;
+float imu_gyro_x = 0.0f;
+float imu_gyro_y = 0.0f;
+float imu_gyro_z = 0.0f;
 float activityIntensity = 0.0f; // Calculated from acceleration magnitude
 float pitchAngle = 0.0f;        // Calculated from accelerometer
 float feed_amount = 2.1f;
@@ -214,6 +217,15 @@ void readSensors()
     activityIntensity = 0.0f;
     pitchAngle = 0.0f;
   }
+
+  if (IMU.gyroscopeAvailable())
+  {
+    IMU.readGyroscope(imu_gyro_x, imu_gyro_y, imu_gyro_z);
+  }
+  else
+  {
+    imu_gyro_x = imu_gyro_y = imu_gyro_z = 0.0f;
+  }
 }
 
 // ----------------------------------------------------
@@ -264,26 +276,26 @@ void packageDataToBinary()
   packet[1] = PACKET_VERSION;
 
   // Data payload
-  writeFloat(packet, 2, ds18b20_temp);       // Body temperature (bytes 2-5)
-  writeFloat(packet, 6, hs300x_temp);        // Environmental temperature (bytes 6-9)
-  writeFloat(packet, 10, humidity);          // Humidity (bytes 10-13)
-  writeFloat(packet, 14, activityIntensity); // Activity Intensity = sqrt(x^2 + y^2 + z^2) (bytes 14-17)
-  writeFloat(packet, 18, pitchAngle);        // Pitch Angle in degrees (bytes 18-21)
+  writeFloat(packet, 2, ds18b20_temp);   // Body temperature (bytes 2-5)
+  writeFloat(packet, 6, hs300x_temp);    // Environmental temperature (bytes 6-9)
+  writeFloat(packet, 10, humidity);      // Humidity (bytes 10-13)
+  writeFloat(packet, 14, imu_accel_x);   // Accelerometer X (bytes 14-17)
+  writeFloat(packet, 18, imu_accel_y);   // Accelerometer Y (bytes 18-21)
+  writeFloat(packet, 22, imu_accel_z);   // Accelerometer Z (bytes 22-25)
+  writeFloat(packet, 26, imu_gyro_x);    // Gyroscope X (bytes 26-29)
+  writeFloat(packet, 30, imu_gyro_y);    // Gyroscope Y (bytes 30-33)
+  writeFloat(packet, 34, imu_gyro_z);    // Gyroscope Z (bytes 34-37)
+  writeFloat(packet, 38, pitchAngle);    // Pitch angle in degrees (bytes 38-41)
 
-  // Feed amount (3 bytes: uint16 for integer part + uint8 for decimal)
-  uint16_t feed_int = (uint16_t)feed_amount;
-  uint8_t feed_dec = (uint8_t)((feed_amount - feed_int) * 100);
-  writeUint16(packet, 22, feed_int);
-  packet[24] = feed_dec;
+  // Compact boolean flag for feeding posture
+  packet[42] = feed_amount > 0.1f ? 1 : 0;
 
-  // Padding (bytes 25-29 unused)
-  packet[25] = 0;
-  packet[26] = 0;
-  packet[27] = 0;
-  packet[28] = 0;
-  packet[29] = 0;
+  // Padding (bytes 43-45 unused)
+  packet[43] = 0;
+  packet[44] = 0;
+  packet[45] = 0;
 
   // Calculate and append CRC16
-  uint16_t crc = calculateCRC16(packet, 30);
-  writeUint16(packet, 30, crc);
+  uint16_t crc = calculateCRC16(packet, 46);
+  writeUint16(packet, 46, crc);
 }
