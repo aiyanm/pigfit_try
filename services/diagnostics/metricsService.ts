@@ -3,6 +3,7 @@ import type { ActivityState, FeedingSchedule, SensorDataPoint } from '../core/ty
 export const FEVER_THRESHOLD_C = 39.5;
 export const HEAT_STRESS_THRESHOLD = 75;
 export const SEVERE_HEAT_THRESHOLD = 79;
+const MINUTES_PER_DAY = 24 * 60;
 
 export const ACTIVITY_THRESHOLDS = {
   LETHARGY_MAX: 1.05,
@@ -15,6 +16,63 @@ export const DEFAULT_FEEDING_SCHEDULE: FeedingSchedule = {
   feedingTimes: ['06:00', '16:00'],
   feedingWindowBeforeMinutes: 20,
   feedingWindowAfterMinutes: 45,
+};
+
+export const isValidScheduleTime = (value: string): boolean => /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
+
+export const normalizeScheduleTime = (value: string): string => {
+  const [hours, minutes] = value.split(':');
+  return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+};
+
+const normalizeMinutesOfDay = (value: number): number => {
+  const normalized = value % MINUTES_PER_DAY;
+  return normalized < 0 ? normalized + MINUTES_PER_DAY : normalized;
+};
+
+const isMinuteWithinWindow = (targetMinute: number, startMinute: number, endMinute: number): boolean => {
+  const normalizedTarget = normalizeMinutesOfDay(targetMinute);
+  const normalizedStart = normalizeMinutesOfDay(startMinute);
+  const normalizedEnd = normalizeMinutesOfDay(endMinute);
+
+  if (normalizedStart <= normalizedEnd) {
+    return normalizedTarget >= normalizedStart && normalizedTarget <= normalizedEnd;
+  }
+
+  return normalizedTarget >= normalizedStart || normalizedTarget <= normalizedEnd;
+};
+
+export const parseStoredFeedingSchedule = (
+  stored: any | null,
+  pigId: string,
+  fallback: FeedingSchedule = DEFAULT_FEEDING_SCHEDULE
+): FeedingSchedule => {
+  let feedingTimes = fallback.feedingTimes;
+
+  try {
+    const rawTimes = JSON.parse(String(stored?.feeding_times ?? '[]'));
+    if (
+      Array.isArray(rawTimes) &&
+      rawTimes.length > 0 &&
+      rawTimes.every((value) => typeof value === 'string' && isValidScheduleTime(normalizeScheduleTime(value.trim())))
+    ) {
+      feedingTimes = rawTimes.map((value) => normalizeScheduleTime(value.trim())).sort();
+    }
+  } catch {
+    feedingTimes = fallback.feedingTimes;
+  }
+
+  return {
+    pigId,
+    feedingsPerDay: Number(stored?.feedings_per_day ?? fallback.feedingsPerDay),
+    feedingTimes,
+    feedingWindowBeforeMinutes: Number(
+      stored?.feeding_window_before_minutes ?? fallback.feedingWindowBeforeMinutes
+    ),
+    feedingWindowAfterMinutes: Number(
+      stored?.feeding_window_after_minutes ?? fallback.feedingWindowAfterMinutes
+    ),
+  };
 };
 
 export const calculateTHI = (tempC: number, humidity: number): number => {
@@ -50,7 +108,7 @@ export const isWithinFeedingWindow = (
     if (scheduledMinute < 0) return false;
     const windowStart = scheduledMinute - schedule.feedingWindowBeforeMinutes;
     const windowEnd = scheduledMinute + schedule.feedingWindowAfterMinutes;
-    return targetMinute >= windowStart && targetMinute <= windowEnd;
+    return isMinuteWithinWindow(targetMinute, windowStart, windowEnd);
   });
 };
 

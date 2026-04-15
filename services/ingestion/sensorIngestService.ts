@@ -2,9 +2,14 @@ import {
   DEFAULT_FEEDING_SCHEDULE,
   calculateTHI,
   classifyActivityState,
+  parseStoredFeedingSchedule,
   tagSensorDataPoint,
 } from '../diagnostics/metricsService';
-import { maybeRunDailyAssessmentForDay, runHourlyInsightForBucket } from '../ai/deterministic/orchestrator';
+import {
+  maybeRunDailyAssessmentForDay,
+  runDailyAssessmentForDay,
+  runHourlyInsightForBucket,
+} from '../ai/deterministic/orchestrator';
 import { dbService } from '../storage/db/client';
 import type {
   FeedingSchedule,
@@ -20,6 +25,7 @@ const lastSeenHourByPig = new Map<string, number>();
 const lastPeriodRefreshAtByPig = new Map<string, number>();
 const periodRefreshInFlightByPig = new Set<string>();
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const PERIOD_AGG_REFRESH_THROTTLE_MS = 20 * 1000;
 type PeriodRefreshSource = 'ingest' | 'timer';
 
@@ -54,17 +60,7 @@ const getHourStartMs = (ts: number): number => {
 const getFeedingScheduleForPig = async (pigId: string): Promise<FeedingSchedule> => {
   const stored = await dbService.getFeedingSchedule(pigId);
   if (stored) {
-    return {
-      pigId,
-      feedingsPerDay: Number(stored.feedings_per_day ?? DEFAULT_FEEDING_SCHEDULE.feedingsPerDay),
-      feedingTimes: JSON.parse(String(stored.feeding_times ?? '[]')),
-      feedingWindowBeforeMinutes: Number(
-        stored.feeding_window_before_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes
-      ),
-      feedingWindowAfterMinutes: Number(
-        stored.feeding_window_after_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes
-      ),
-    };
+    return parseStoredFeedingSchedule(stored, pigId, DEFAULT_FEEDING_SCHEDULE);
   }
 
   await dbService.upsertFeedingSchedule({
@@ -108,6 +104,15 @@ const toStoredSensorRow = async (data: SensorDataPoint, deviceId: string, pigId:
     within_feeding_window: tagged.withinFeedingWindow ? 1 : 0,
     true_eating_event: tagged.trueEatingEvent ? 1 : 0,
     raw_risk_label: tagged.rawRiskLabel ?? 'normal',
+  };
+};
+
+const getLocalDayBounds = (referenceTs: number): { dayStartMs: number; dayEndMs: number; bucketDay: string } => {
+  const dayStartMs = new Date(toLocalDateString(referenceTs)).getTime();
+  return {
+    dayStartMs,
+    dayEndMs: dayStartMs + DAY_MS - 1,
+    bucketDay: toLocalDateString(referenceTs),
   };
 };
 
@@ -484,4 +489,55 @@ export const refreshAllPeriodAggregates = async (pigId: string): Promise<void> =
   for (const period of periods) {
     await computeAndStorePeriodAggregates(pigId, period);
   }
+};
+
+export const refreshTodayFeedingAnalyticsForPig = async (
+  pigId: string,
+  referenceTs = Date.now()
+): Promise<void> => {
+  const { dayStartMs, dayEndMs, bucketDay } = getLocalDayBounds(referenceTs);
+  const rawRows = await dbService.getSensorData(dayStartMs, dayEndMs, pigId);
+  if (rawRows.length === 0) return;
+
+  const schedule = await getFeedingScheduleForPig(pigId);
+
+  for (const record of rawRows) {
+    const tagged = tagSensorDataPoint(
+      {
+        timestamp: Number(record.timestamp),
+        temp: Number(record.temp),
+        envTemp: Number(record.env_temp),
+        humidity: Number(record.humidity),
+        activityIntensity: Number(record.activity_intensity),
+        pitchAngle: Number(record.pitch_angle),
+        accelX: record.accel_x == null ? undefined : Number(record.accel_x),
+        accelY: record.accel_y == null ? undefined : Number(record.accel_y),
+        accelZ: record.accel_z == null ? undefined : Number(record.accel_z),
+        gyroX: record.gyro_x == null ? undefined : Number(record.gyro_x),
+        gyroY: record.gyro_y == null ? undefined : Number(record.gyro_y),
+        gyroZ: record.gyro_z == null ? undefined : Number(record.gyro_z),
+        feedingPostureDetected: Number(record.feeding_posture_detected ?? 0) === 1,
+      },
+      schedule
+    );
+
+    await dbService.updateSensorDataFeedingFields(
+      Number(record.id),
+      tagged.withinFeedingWindow ? 1 : 0,
+      tagged.trueEatingEvent ? 1 : 0,
+      tagged.rawRiskLabel ?? 'normal'
+    );
+  }
+
+  const touchedHourStarts = [...new Set(rawRows.map((row: any) => getHourStartMs(Number(row.timestamp))))].sort(
+    (a, b) => a - b
+  );
+
+  for (const bucketStartMs of touchedHourStarts) {
+    await finalizeHourlyAggregateBucket(pigId, bucketStartMs);
+    await runHourlyInsightForBucket(pigId, bucketStartMs);
+  }
+
+  await runDailyAssessmentForDay(pigId, bucketDay);
+  await refreshAllPeriodAggregates(pigId);
 };

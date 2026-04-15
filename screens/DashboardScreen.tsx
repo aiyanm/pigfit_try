@@ -2,7 +2,18 @@ import { Text, View, ActivityIndicator, Modal, TouchableOpacity, Pressable, Text
 import { Ionicons } from '@expo/vector-icons';
 import { useBLEContext } from '../providers/BLEProvider';
 import { useEffect, useState } from 'react';
-import { DEFAULT_FEEDING_SCHEDULE, isWithinFeedingWindow } from '../services/diagnostics/metricsService';
+import {
+  DEFAULT_FEEDING_SCHEDULE,
+  FEVER_THRESHOLD_C,
+  HEAT_STRESS_THRESHOLD,
+  SEVERE_HEAT_THRESHOLD,
+  calculateTHI,
+  isValidScheduleTime,
+  isWithinFeedingWindow,
+  normalizeScheduleTime,
+  parseStoredFeedingSchedule,
+} from '../services/diagnostics/metricsService';
+import { refreshTodayFeedingAnalyticsForPig } from '../services/ingestion/sensorIngestService';
 import { dbService } from '../services/storage/db/client';
 import type { FeedingSchedule } from '../services/core/types';
 
@@ -17,6 +28,13 @@ interface FeedingPresentation {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
   color: string;
+}
+
+interface RiskBadge {
+  label: string;
+  bgColor: string;
+  dotColor: string;
+  textColor: string;
 }
 
 interface LivestockItemProps {
@@ -101,35 +119,6 @@ const LivestockItem = ({
   );
 };
 
-const parseStoredSchedule = (stored: any | null): FeedingSchedule => {
-  if (!stored) {
-    return {
-      ...DEFAULT_FEEDING_SCHEDULE,
-      pigId: PIG_ID,
-    };
-  }
-
-  let feedingTimes = DEFAULT_FEEDING_SCHEDULE.feedingTimes;
-  try {
-    const parsedTimes = JSON.parse(String(stored.feeding_times ?? '[]'));
-    if (Array.isArray(parsedTimes) && parsedTimes.length > 0) {
-      feedingTimes = parsedTimes.map((value) => String(value));
-    }
-  } catch {}
-
-  return {
-    pigId: PIG_ID,
-    feedingsPerDay: Number(stored.feedings_per_day ?? DEFAULT_FEEDING_SCHEDULE.feedingsPerDay),
-    feedingTimes,
-    feedingWindowBeforeMinutes: Number(
-      stored.feeding_window_before_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes
-    ),
-    feedingWindowAfterMinutes: Number(
-      stored.feeding_window_after_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes
-    ),
-  };
-};
-
 const normalizeDraftTimes = (times: string[], count: number): string[] => {
   const trimmed = times.slice(0, count).map((value) => value.trim());
   while (trimmed.length < count) {
@@ -137,13 +126,6 @@ const normalizeDraftTimes = (times: string[], count: number): string[] => {
   }
   return trimmed;
 };
-
-const normalizeTimeValue = (value: string): string => {
-  const [hours, minutes] = value.split(':');
-  return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
-};
-
-const isValidTime = (value: string): boolean => /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
 
 const getLiveStatus = (
   feedingPostureDetected: boolean,
@@ -170,6 +152,72 @@ const getFeedingPresentation = (
     return { label: 'Moving', icon: 'fitness', color: '#3b82f6' };
   }
   return { label: 'Not Eating', icon: 'bed', color: '#6b7280' };
+};
+
+const getRiskBadges = (
+  data: {
+    temp: number;
+    envTemp: number;
+    humidity: number;
+    activityIntensity: number;
+  } | null
+): RiskBadge[] => {
+  if (!data) return [];
+
+  const thi = calculateTHI(data.envTemp, data.humidity);
+  const badges: RiskBadge[] = [];
+
+  if (data.temp > FEVER_THRESHOLD_C) {
+    badges.push({
+      label: 'Possible fever',
+      bgColor: '#fee2e2',
+      dotColor: '#ef4444',
+      textColor: '#991b1b',
+    });
+  }
+
+  if (thi > SEVERE_HEAT_THRESHOLD) {
+    badges.push({
+      label: 'Severe heat stress',
+      bgColor: '#ffedd5',
+      dotColor: '#f97316',
+      textColor: '#9a3412',
+    });
+  } else if (thi >= HEAT_STRESS_THRESHOLD) {
+    badges.push({
+      label: 'Mild heat stress',
+      bgColor: '#d9f99d',
+      dotColor: '#84cc16',
+      textColor: '#3f6212',
+    });
+  }
+
+  if (data.activityIntensity < 1.05) {
+    badges.push({
+      label: 'Low activity',
+      bgColor: '#e0f2fe',
+      dotColor: '#0ea5e9',
+      textColor: '#0c4a6e',
+    });
+  }
+
+  return badges;
+};
+
+const getHealthScoreLabel = (
+  data: {
+    temp: number;
+    envTemp: number;
+    humidity: number;
+    activityIntensity: number;
+  } | null
+): string => {
+  if (!data) return '--';
+
+  const thi = calculateTHI(data.envTemp, data.humidity);
+  if (data.temp > FEVER_THRESHOLD_C || thi > SEVERE_HEAT_THRESHOLD) return 'Critical';
+  if (thi >= HEAT_STRESS_THRESHOLD || data.activityIntensity < 1.05) return 'Watch';
+  return 'Stable';
 };
 
 export default function DashboardScreen({ navigation }: any) {
@@ -199,7 +247,7 @@ export default function DashboardScreen({ navigation }: any) {
     setScheduleFeedback(null);
     try {
       const stored = await dbService.getFeedingSchedule(PIG_ID);
-      const nextSchedule = parseStoredSchedule(stored);
+      const nextSchedule = parseStoredFeedingSchedule(stored, PIG_ID, DEFAULT_FEEDING_SCHEDULE);
       setSchedule(nextSchedule);
       setFeedingCount(nextSchedule.feedingsPerDay);
       setFeedingTimesDraft(normalizeDraftTimes(nextSchedule.feedingTimes, nextSchedule.feedingsPerDay));
@@ -251,12 +299,12 @@ export default function DashboardScreen({ navigation }: any) {
       return;
     }
 
-    if (normalizedTimes.some((value) => !isValidTime(value))) {
+    if (normalizedTimes.some((value) => !isValidScheduleTime(normalizeScheduleTime(value)))) {
       setScheduleFeedback('Use 24-hour HH:mm format for each feeding time.');
       return;
     }
 
-    const sortedTimes = normalizedTimes.map(normalizeTimeValue).sort();
+    const sortedTimes = normalizedTimes.map(normalizeScheduleTime).sort();
     if (new Set(sortedTimes).size !== sortedTimes.length) {
       setScheduleFeedback('Feeding times must be unique.');
       return;
@@ -281,7 +329,13 @@ export default function DashboardScreen({ navigation }: any) {
       });
       setSchedule(nextSchedule);
       setFeedingTimesDraft(normalizeDraftTimes(nextSchedule.feedingTimes, nextSchedule.feedingsPerDay));
-      setScheduleFeedback('Feeding schedule saved.');
+      try {
+        await refreshTodayFeedingAnalyticsForPig(PIG_ID);
+        setScheduleFeedback("Feeding schedule saved and today's analytics refreshed.");
+      } catch (refreshError) {
+        console.error('❌ Failed to refresh feeding analytics after save:', refreshError);
+        setScheduleFeedback("Feeding schedule saved, but today's analytics could not be refreshed yet.");
+      }
     } catch (error) {
       console.error('❌ Failed to save feeding schedule:', error);
       setScheduleFeedback('Unable to save feeding schedule.');
@@ -297,7 +351,8 @@ export default function DashboardScreen({ navigation }: any) {
   const feedingPresentation = receivedData
     ? getFeedingPresentation(receivedData.feedingPostureDetected, withinFeedingWindow, receivedData.activityIntensity)
     : ({ label: 'Waiting for data', icon: 'time', color: '#9ca3af' } as FeedingPresentation);
-  const healthIndex = receivedData ? 'Good' : '--';
+  const healthIndex = getHealthScoreLabel(receivedData);
+  const riskBadges = getRiskBadges(receivedData);
 
   return (
     <View className="flex-1 bg-gray-100">
@@ -327,6 +382,22 @@ export default function DashboardScreen({ navigation }: any) {
             bgColor="#e5f3e5"
           />
         </View>
+
+        <TouchableOpacity
+          className="bg-white rounded-lg shadow-sm p-4 mb-5"
+          onPress={handleOpenModal}
+          activeOpacity={0.7}
+        >
+          <View className="flex-row justify-between items-center">
+            <View className="flex-1 pr-4">
+              <Text className="text-base font-semibold text-gray-900">Feeding Schedule</Text>
+              <Text className="text-sm text-gray-500 mt-1">
+                {schedule.feedingTimes.join(', ')}
+              </Text>
+            </View>
+            <Ionicons name="calendar-outline" size={22} color="#2563eb" />
+          </View>
+        </TouchableOpacity>
 
         <Text className="text-lg font-semibold text-gray-700 mt-5 mb-2.5">Live Data</Text>
         <View className="bg-white rounded-lg shadow-sm">
@@ -409,7 +480,7 @@ export default function DashboardScreen({ navigation }: any) {
                   }}
                 >
                   <Text className="text-sm text-gray-500 mb-1">Health Score</Text>
-                  <Text className="text-2xl font-bold text-gray-900">Excellent</Text>
+                  <Text className="text-2xl font-bold text-gray-900">{healthIndex}</Text>
                 </View>
               </View>
 
@@ -498,17 +569,24 @@ export default function DashboardScreen({ navigation }: any) {
                 activeOpacity={0.7}
               >
                 <Text className="text-lg font-semibold mb-4" style={{ color: '#1d4ed8' }}>Risk & Alerts</Text>
-                <View className="flex-row flex-wrap gap-2">
-                  <View className="px-4 py-2 rounded-full flex-row items-center" style={{ backgroundColor: '#fee2e2' }}>
-                    <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: '#ef4444' }} />
-                    <Text className="text-sm font-medium" style={{ color: '#991b1b' }}>Possible fever</Text>
+                {riskBadges.length > 0 ? (
+                  <View className="flex-row flex-wrap gap-2">
+                    {riskBadges.map((badge) => (
+                      <View
+                        key={badge.label}
+                        className="px-4 py-2 rounded-full flex-row items-center"
+                        style={{ backgroundColor: badge.bgColor }}
+                      >
+                        <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: badge.dotColor }} />
+                        <Text className="text-sm font-medium" style={{ color: badge.textColor }}>
+                          {badge.label}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
-
-                  <View className="px-4 py-2 rounded-full flex-row items-center" style={{ backgroundColor: '#d9f99d' }}>
-                    <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: '#84cc16' }} />
-                    <Text className="text-sm font-medium" style={{ color: '#3f6212' }}>Mild heat stress</Text>
-                  </View>
-                </View>
+                ) : (
+                  <Text className="text-sm font-medium text-slate-600">No active alerts from current live readings.</Text>
+                )}
               </TouchableOpacity>
             </ScrollView>
           </View>

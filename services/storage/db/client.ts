@@ -854,6 +854,33 @@ class DatabaseService {
     }
   }
 
+  async updateSensorDataFeedingFields(
+    id: number,
+    withinFeedingWindow: number,
+    trueEatingEvent: number,
+    rawRiskLabel: string
+  ): Promise<void> {
+    try {
+      await this._ensureInitialized();
+
+      if (!this.db) {
+        throw new Error('Database connection is null');
+      }
+
+      await this.db.runAsync(
+        `UPDATE sensor_data
+         SET within_feeding_window = ?,
+             true_eating_event = ?,
+             raw_risk_label = ?
+         WHERE id = ?`,
+        [withinFeedingWindow, trueEatingEvent, rawRiskLabel, id]
+      );
+    } catch (error) {
+      console.error('❌ Error updating sensor feeding fields:', error);
+      throw error;
+    }
+  }
+
   /**
    * Get hourly aggregates for a date range
    */
