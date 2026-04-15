@@ -2,6 +2,9 @@ import { Text, View, ActivityIndicator, Modal, TouchableOpacity, Pressable, Text
 import { Ionicons } from '@expo/vector-icons';
 import { useBLEContext } from '../providers/BLEProvider';
 import { useEffect, useState } from 'react';
+import { DEFAULT_FEEDING_SCHEDULE, isWithinFeedingWindow } from '../services/diagnostics/metricsService';
+import { dbService } from '../services/storage/db/client';
+import type { FeedingSchedule } from '../services/core/types';
 
 // --- STATUS CARD COMPONENT ---
 interface StatusCardProps {
@@ -24,43 +27,43 @@ interface LivestockItemProps {
   temp: number;
   feedingPostureDetected: boolean;
   pitchAngle: number;
+  withinFeedingWindow: boolean;
   status: string;
   onNavigateToAnalyze?: () => void;
 }
 
-const LivestockItem = ({ id, temp, feedingPostureDetected, pitchAngle, status, onNavigateToAnalyze }: LivestockItemProps) => {
+const LivestockItem = ({
+  id,
+  temp,
+  feedingPostureDetected,
+  pitchAngle,
+  withinFeedingWindow,
+  status,
+  onNavigateToAnalyze,
+}: LivestockItemProps) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [weight, setWeight] = useState('');
   const [isEditingWeight, setIsEditingWeight] = useState(false);
 
-  // Logic to determine feeding status based on pitch angle and feed
-  const getFeedingStatus = () => {
-    // Head down = pitch angle < 45 degrees (eating posture)
-    const isHeadDown = pitchAngle < 45;
-    const isFeedingActive = feedingPostureDetected;
+  const isEatingNow = pitchAngle < 45 && feedingPostureDetected;
 
-    if (isHeadDown && isFeedingActive) {
+  // Keep the main label schedule-based and only surface live eating during that window.
+  const getFeedingStatus = () => {
+    if (withinFeedingWindow) {
       return {
-        label: 'Eating',
+        label: 'Feeding',
         icon: 'restaurant',
         color: '#10b981',
         bgColor: '#d1fae5',
       };
-    } else if (status === 'Active') {
-      return {
-        label: 'Moving',
-        icon: 'fitness',
-        color: '#3b82f6',
-        bgColor: '#dbeafe',
-      };
-    } else {
-      return {
-        label: 'Resting',
-        icon: 'bed',
-        color: '#6b7280',
-        bgColor: '#f3f4f6',
-      };
     }
+
+    return {
+      label: 'Not Feeding',
+      icon: 'time-outline',
+      color: '#6b7280',
+      bgColor: '#f3f4f6',
+    };
   };
 
   // Logic to determine status color and styling
@@ -88,6 +91,7 @@ const LivestockItem = ({ id, temp, feedingPostureDetected, pitchAngle, status, o
 
   const { color: statusColor, bgColor: statusBgColor } = getStatusStyles();
   const { color: tempColor, bgColor: tempBgColor } = getTempStyles();
+  const feedingStatus = getFeedingStatus();
 
   return (
     <>
@@ -118,15 +122,20 @@ const LivestockItem = ({ id, temp, feedingPostureDetected, pitchAngle, status, o
             <Text className="text-xs text-gray-500">Feeding</Text>
             <View className="flex-row items-center mt-1">
               <Ionicons
-                name={getFeedingStatus().icon as any}
+                name={feedingStatus.icon as any}
                 size={20}
-                color={getFeedingStatus().color}
+                color={feedingStatus.color}
                 style={{ marginRight: 6 }}
               />
-              <Text className="text-base font-semibold" style={{ color: getFeedingStatus().color }}>
-                {getFeedingStatus().label}
+              <Text className="text-base font-semibold" style={{ color: feedingStatus.color }}>
+                {feedingStatus.label}
               </Text>
             </View>
+            {withinFeedingWindow && isEatingNow ? (
+              <Text className="text-xs font-medium mt-1" style={{ color: feedingStatus.color }}>
+                Eating now
+              </Text>
+            ) : null}
           </View>
         </View>
       </TouchableOpacity>
@@ -258,6 +267,38 @@ export default function DashboardScreen({ navigation }: any) {
   } = useBLEContext();
 
   const [isScanning, setIsScanning] = useState(false);
+  const [feedingSchedule, setFeedingSchedule] = useState<FeedingSchedule>(DEFAULT_FEEDING_SCHEDULE);
+
+  useEffect(() => {
+    const loadFeedingSchedule = async () => {
+      try {
+        const stored = await dbService.getFeedingSchedule('LIVE-PIG-01');
+        if (!stored) {
+          setFeedingSchedule(DEFAULT_FEEDING_SCHEDULE);
+          return;
+        }
+
+        setFeedingSchedule({
+          pigId: 'LIVE-PIG-01',
+          feedingsPerDay: Number(stored.feedings_per_day ?? DEFAULT_FEEDING_SCHEDULE.feedingsPerDay),
+          feedingTimes: JSON.parse(String(stored.feeding_times ?? '[]')),
+          feedingWindowBeforeMinutes: Number(
+            stored.feeding_window_before_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes
+          ),
+          feedingWindowAfterMinutes: Number(
+            stored.feeding_window_after_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes
+          ),
+        });
+      } catch (error) {
+        console.error('Failed to load feeding schedule:', error);
+        setFeedingSchedule(DEFAULT_FEEDING_SCHEDULE);
+      }
+    };
+
+    loadFeedingSchedule().catch((error) => {
+      console.error('Failed to initialize feeding schedule:', error);
+    });
+  }, []);
 
   // BLE scanning is now handled from Profile screen only
   // No auto-scanning on Dashboard mount
@@ -280,6 +321,7 @@ export default function DashboardScreen({ navigation }: any) {
   const currentStatus = receivedData 
     ? getStatus(receivedData.activityIntensity) 
     : 'Waiting...';
+  const withinFeedingWindow = isWithinFeedingWindow(Date.now(), feedingSchedule);
 
   // Calculate health index placeholder
   const healthIndex = receivedData ? "Good" : "--";
@@ -331,6 +373,7 @@ export default function DashboardScreen({ navigation }: any) {
               temp={receivedData.temp}
               feedingPostureDetected={receivedData.feedingPostureDetected}
               pitchAngle={receivedData.pitchAngle}
+              withinFeedingWindow={withinFeedingWindow}
               status={currentStatus}
               onNavigateToAnalyze={() => navigation.navigate('Analyze')}
             />
