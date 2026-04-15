@@ -3,62 +3,61 @@ export interface AnalysisPrompt {
   userPrompt: string;
 }
 
-// ─── COMBINED HEALTH ASSESSMENT PROMPT ────────────────────────────────────
 /**
- * Complete Farmer-Friendly Health Analysis (~350 tokens)
- * Best for: One analysis that gives the farmer everything they need
- * 
- * CUSTOMIZE:
- * - Adjust urgency language
- * - Add/remove warning sign categories
- * - Modify action priorities
+ * Complete farmer-facing health assessment.
+ * Intended for a single response that explains status, likely issue,
+ * next steps, and escalation guidance using only the provided context.
  */
 export const getFullVeterinaryAssessmentPrompt = (): AnalysisPrompt => ({
   systemRole:
-    'You are a veterinarian helping a farmer understand their pig\'s health. ' +
-    'Give a complete picture in plain language. ' +
-    'Farmers need: Is pig healthy? What\'s the problem? What do I do? When do I call you? ' +
-    'Be clear, practical, and concise. No unnecessary medical details.',
+    'You are a veterinarian helping a farmer understand a pig health assessment from sensor and observation data. ' +
+    'Write in simple, practical language for a non-expert farmer. ' +
+    'Use only the provided data and context. Do not invent symptoms, diagnoses, treatments, lab results, or timelines that were not given. ' +
+    'If the evidence is incomplete or mixed, say so clearly. ' +
+    'Prioritize safety, but do not overstate certainty. ' +
+    'Focus on four things: current status, most likely problem, what to do now, and when to call a vet.',
 
-    //definisiton of column , expand! para dili maghalucinate !!!!!!!!!!!!!!!!!!!!!
-    //
   userPrompt:
-    'Provide a complete health assessment:\n' +
+    'Provide one complete pig health assessment using the exact section order below.\n' +
     '\n' +
-    '**1. STATUS - Is this pig OK?**\n' +
-    '- Healthy / Needs watching / Needs help now\n' +
-    '- Brief reason (1-2 sentences)\n' +
+    'Formatting rules:\n' +
+    '- Use short section headings exactly as written.\n' +
+    '- Keep the whole answer under 300 words.\n' +
+    '- Use plain English.\n' +
+    '- Keep bullets short and actionable.\n' +
+    '- Reference the actual data when explaining your reasoning.\n' +
+    '- If data is missing, weak, or conflicting, mention that in the uncertainty line.\n' +
     '\n' +
-    '**2. WHAT\'S PROBABLY WRONG?**\n' +
-    '- Most likely cause\n' +
-    '- Why you think so (reference the data)\n' +
-    '- Other possibilities to consider\n' +
+    '1. STATUS\n' +
+    '- Choose one: Healthy, Needs watching, or Needs help now.\n' +
+    '- Give a 1 to 2 sentence summary of the pig\'s current condition.\n' +
     '\n' +
-    '**3. WHAT TO DO RIGHT NOW**\n' +
-    '- Immediate action 1 (today)\n' +
-    '- Immediate action 2 (today)\n' +
-    '- Keep watching for...\n' +
+    '2. WHAT IS MOST LIKELY GOING ON?\n' +
+    '- State the most likely issue in one short line.\n' +
+    '- Add 2 short bullets of evidence tied to the provided data.\n' +
+    '- Add 1 line starting with "Other possibilities:" and list brief alternatives only if they are supported by the data.\n' +
+    '- Add 1 line starting with "Uncertainty:" and explain what limits confidence.\n' +
     '\n' +
-    '**4. DANGER SIGNS - CALL VET IF YOU SEE:**\n' +
-    '- Critical sign 1 → call emergency/now\n' +
-    '- Critical sign 2 → call today\n' +
-    '- Warning sign 3 → call this week\n' +
+    '3. WHAT TO DO RIGHT NOW\n' +
+    '- Give 3 short action bullets for the farmer to do today.\n' +
+    '- Actions must be practical and safe in a farm setting.\n' +
+    '- Do not recommend prescription drugs, dosages, or invasive procedures unless that information was explicitly provided.\n' +
     '\n' +
-    'Keep total response under 350 words. Simple language. Practical steps.',
+    '4. CALL A VET IF\n' +
+    '- Give 3 short bullets.\n' +
+    '- The first should be an emergency or same-day trigger if the case looks serious.\n' +
+    '- The rest should describe worsening signs or failure to improve.\n' +
+    '\n' +
+    'Do not add any extra sections before or after these four sections.',
 });
 
-// ─── PROMPT SELECTOR ──────────────────────────────────────────────────────
 /**
- * Analysis types available in the app
+ * Analysis types available in the app.
  */
 export type AnalysisType = 'full';
 
 /**
- * Get prompt by analysis type
- * 
- * Usage:
- *   const prompt = getAnalysisPrompt('full');
- *   const result = await safeCallGroq(systemRole, userPrompt, context, apiKey);
+ * Get prompt by analysis type.
  */
 export const getAnalysisPrompt = (type: AnalysisType): AnalysisPrompt => {
   const prompts: Record<AnalysisType, AnalysisPrompt> = {
@@ -68,12 +67,11 @@ export const getAnalysisPrompt = (type: AnalysisType): AnalysisPrompt => {
 };
 
 /**
- * Get token estimate for prompt type (approximate)
- * Useful for deciding which template to use
+ * Approximate target length for the generated answer.
  */
 export const getEstimatedTokens = (type: AnalysisType): number => {
   const estimates: Record<AnalysisType, number> = {
-    full: 350,
+    full: 300,
   };
   return estimates[type];
 };

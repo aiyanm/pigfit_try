@@ -22,13 +22,20 @@ interface FeedingPresentation {
 interface LivestockItemProps {
   id: string;
   temp: number;
+<<<<<<< HEAD
   feedingLabel: string;
   feedingIcon: keyof typeof Ionicons.glyphMap;
   feedingColor: string;
+=======
+  feedingPostureDetected: boolean;
+  pitchAngle: number;
+  withinFeedingWindow: boolean;
+>>>>>>> bedff2114937346b157106e289f951e098e49e3d
   status: string;
   onPress: () => void;
 }
 
+<<<<<<< HEAD
 const PIG_ID = 'LIVE-PIG-01';
 const MAX_FEEDINGS_PER_DAY = 6;
 
@@ -170,6 +177,230 @@ const getFeedingPresentation = (
     return { label: 'Moving', icon: 'fitness', color: '#3b82f6' };
   }
   return { label: 'Not Eating', icon: 'bed', color: '#6b7280' };
+=======
+const LivestockItem = ({
+  id,
+  temp,
+  feedingPostureDetected,
+  pitchAngle,
+  withinFeedingWindow,
+  status,
+  onNavigateToAnalyze,
+}: LivestockItemProps) => {
+  const [modalVisible, setModalVisible] = useState(false);
+  const [weight, setWeight] = useState('');
+  const [isEditingWeight, setIsEditingWeight] = useState(false);
+
+  const isEatingNow = pitchAngle < 45 && feedingPostureDetected;
+
+  // Keep the main label schedule-based and only surface live eating during that window.
+  const getFeedingStatus = () => {
+    if (withinFeedingWindow) {
+      return {
+        label: 'Feeding',
+        icon: 'restaurant',
+        color: '#10b981',
+        bgColor: '#d1fae5',
+      };
+    }
+
+    return {
+      label: 'Not Feeding',
+      icon: 'time-outline',
+      color: '#6b7280',
+      bgColor: '#f3f4f6',
+    };
+  };
+
+  // Logic to determine status color and styling
+  const getStatusStyles = () => {
+    switch (status) {
+      case 'Active':
+        return { color: '#28a745', bgColor: '#e5f3e5' };
+      case 'Resting':
+        return { color: '#6c757d', bgColor: '#e9ecef' };
+      default:
+        return { color: '#ffc107', bgColor: '#fff3cd' };
+    }
+  };
+
+  // Logic to determine temperature color based on value
+  const getTempStyles = () => {
+    if (temp > 39.0) {
+      return { color: '#dc3545', bgColor: '#f8d7da' }; // High - Red
+    } else if (temp < 38.0) {
+      return { color: '#3498db', bgColor: '#eaf6ff' }; // Low - Blue
+    } else {
+      return { color: '#696969 ', bgColor: '#696969 ' }; // Normal - grey
+    }
+  };
+
+  const { color: statusColor, bgColor: statusBgColor } = getStatusStyles();
+  const { color: tempColor, bgColor: tempBgColor } = getTempStyles();
+  const feedingStatus = getFeedingStatus();
+
+  return (
+    <>
+      <TouchableOpacity 
+        className="p-4 border-b border-gray-200" 
+        onPress={() => setModalVisible(true)}
+        activeOpacity={0.7}
+      >
+        {/* Pig ID and Status Header */}
+        <View className="flex-row justify-between items-center mb-2.5">
+          <Text className="text-base font-semibold text-gray-800">{id}</Text>
+          {/* <View className="px-2.5 py-1 rounded-full" style={{ backgroundColor: statusBgColor }}>
+            <Text className="text-xs font-semibold" style={{ color: statusColor }}>{status}</Text>
+          </View> */}
+        </View>
+
+        {/* Sensor Data (Temperature, Activity, Feeding Status) */}
+        <View className="flex-row justify-between">
+          <View className="flex-1">
+            <Text className="text-xs text-gray-500">Temp</Text>
+            <Text className="text-base font-semibold mt-1" style={{ color: tempColor }}>{temp.toFixed(1)}°C</Text>
+          </View>
+          <View className="flex-1">
+            <Text className="text-xs text-gray-500">Activity</Text>
+            <Text className="text-base font-semibold mt-1" style={{ color: statusColor }}>{status}</Text>
+          </View>
+          <View className="flex-1">
+            <Text className="text-xs text-gray-500">Feeding</Text>
+            <View className="flex-row items-center mt-1">
+              <Ionicons
+                name={feedingStatus.icon as any}
+                size={20}
+                color={feedingStatus.color}
+                style={{ marginRight: 6 }}
+              />
+              <Text className="text-base font-semibold" style={{ color: feedingStatus.color }}>
+                {feedingStatus.label}
+              </Text>
+            </View>
+            {withinFeedingWindow && isEatingNow ? (
+              <Text className="text-xs font-medium mt-1" style={{ color: feedingStatus.color }}>
+                Eating now
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {/* Modal for detailed view */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View className="flex-1 justify-end" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
+          <View className="bg-white rounded-t-3xl p-6" style={{ minHeight: '50%' }}>
+            
+            {/* Modal Header */}
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-2xl font-bold text-gray-900">Breeder Details</Text>
+              <Pressable onPress={() => setModalVisible(false)}>
+                <Text className="text-xl font-semibold" style={{ color: '#ef4444' }}>Close</Text>
+              </Pressable>
+            </View>
+
+            {/* Pig ID */}
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-base text-gray-600">Pig ID:</Text>
+              <Text className="text-xl font-bold" style={{ color: '#3b82f6' }}>{id}</Text>
+            </View>
+
+            {/* Weight and Health Score Row */}
+            <View className="flex-row justify-between mb-6 gap-3">
+              <TouchableOpacity 
+                className="flex-1 p-4 bg-white rounded-xl" 
+                onPress={() => setIsEditingWeight(true)}
+                activeOpacity={0.7}
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+              >
+                <Text className="text-sm text-gray-500 mb-1">Weight</Text>
+                {isEditingWeight ? (
+                  <TextInput
+                    className="text-2xl font-bold text-gray-900"
+                    value={weight}
+                    onChangeText={setWeight}
+                    keyboardType="numeric"
+                    autoFocus
+                    onBlur={() => setIsEditingWeight(false)}
+                    style={{ padding: 0, margin: 0 }}
+                  />
+                ) : (
+                  <Text className="text-2xl font-bold text-gray-900">{weight} kg</Text>
+                )}
+              </TouchableOpacity>
+              <View 
+                className="flex-1 p-4 bg-white rounded-xl"
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+              >
+                <Text className="text-sm text-gray-500 mb-1">Health Score</Text>
+                <Text className="text-2xl font-bold text-gray-900">Excellent</Text>
+              </View>
+            </View>
+
+
+            {/* Risk & Alerts Section */}
+            <TouchableOpacity 
+              className="p-4 rounded-xl mb-4" 
+              style={{ backgroundColor: '#dbeafe'}}
+              onPress={() => {
+                setModalVisible(false);
+                onNavigateToAnalyze?.();
+              }}
+              activeOpacity={0.7}
+            >
+              <Text className="text-lg font-semibold mb-4" style={{ color: '#1d4ed8' }}>Risk & Alerts</Text>
+              
+              {/* 2-column badge layout */}
+              <View className="flex-row flex-wrap gap-2">
+                
+                {/* Possible fever - Red badge */}
+                <View 
+                  className="px-4 py-2 rounded-full flex-row items-center"
+                  style={{ backgroundColor: '#fee2e2' }}
+                >
+                  <View 
+                    className="w-2 h-2 rounded-full mr-2"
+                    style={{ backgroundColor: '#ef4444' }}
+                  />
+                  <Text className="text-sm font-medium" style={{ color: '#991b1b' }}>Possible fever</Text>
+                </View>
+
+                {/* Mild heat stress - Yellow/Green badge */}
+                <View 
+                  className="px-4 py-2 rounded-full flex-row items-center"
+                  style={{ backgroundColor: '#d9f99d' }}
+                >
+                  <View 
+                    className="w-2 h-2 rounded-full mr-2"
+                    style={{ backgroundColor: '#84cc16' }}
+                  />
+                  <Text className="text-sm font-medium" style={{ color: '#3f6212' }}>Mild heat stress</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );    
+>>>>>>> bedff2114937346b157106e289f951e098e49e3d
 };
 
 export default function DashboardScreen({ navigation }: any) {
@@ -182,6 +413,7 @@ export default function DashboardScreen({ navigation }: any) {
   } = useBLEContext();
 
   const [isScanning, setIsScanning] = useState(false);
+<<<<<<< HEAD
   const [modalVisible, setModalVisible] = useState(false);
   const [weight, setWeight] = useState('');
   const [isEditingWeight, setIsEditingWeight] = useState(false);
@@ -193,6 +425,40 @@ export default function DashboardScreen({ navigation }: any) {
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
+=======
+  const [feedingSchedule, setFeedingSchedule] = useState<FeedingSchedule>(DEFAULT_FEEDING_SCHEDULE);
+
+  useEffect(() => {
+    const loadFeedingSchedule = async () => {
+      try {
+        const stored = await dbService.getFeedingSchedule('LIVE-PIG-01');
+        if (!stored) {
+          setFeedingSchedule(DEFAULT_FEEDING_SCHEDULE);
+          return;
+        }
+
+        setFeedingSchedule({
+          pigId: 'LIVE-PIG-01',
+          feedingsPerDay: Number(stored.feedings_per_day ?? DEFAULT_FEEDING_SCHEDULE.feedingsPerDay),
+          feedingTimes: JSON.parse(String(stored.feeding_times ?? '[]')),
+          feedingWindowBeforeMinutes: Number(
+            stored.feeding_window_before_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes
+          ),
+          feedingWindowAfterMinutes: Number(
+            stored.feeding_window_after_minutes ?? DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes
+          ),
+        });
+      } catch (error) {
+        console.error('Failed to load feeding schedule:', error);
+        setFeedingSchedule(DEFAULT_FEEDING_SCHEDULE);
+      }
+    };
+
+    loadFeedingSchedule().catch((error) => {
+      console.error('Failed to initialize feeding schedule:', error);
+    });
+  }, []);
+>>>>>>> bedff2114937346b157106e289f951e098e49e3d
 
   const loadSchedule = async () => {
     setScheduleLoading(true);
@@ -227,12 +493,19 @@ export default function DashboardScreen({ navigation }: any) {
     loadSchedule().catch(() => undefined);
   };
 
+<<<<<<< HEAD
   const handleFeedingCountChange = (nextCount: number) => {
     const clamped = Math.min(MAX_FEEDINGS_PER_DAY, Math.max(1, nextCount));
     setFeedingCount(clamped);
     setFeedingTimesDraft((current) => normalizeDraftTimes(current, clamped));
     setScheduleFeedback(null);
   };
+=======
+  const currentStatus = receivedData 
+    ? getStatus(receivedData.activityIntensity) 
+    : 'Waiting...';
+  const withinFeedingWindow = isWithinFeedingWindow(Date.now(), feedingSchedule);
+>>>>>>> bedff2114937346b157106e289f951e098e49e3d
 
   const handleTimeChange = (index: number, value: string) => {
     setFeedingTimesDraft((current) => {
@@ -334,9 +607,15 @@ export default function DashboardScreen({ navigation }: any) {
             <LivestockItem
               id={PIG_ID}
               temp={receivedData.temp}
+<<<<<<< HEAD
               feedingLabel={feedingPresentation.label}
               feedingIcon={feedingPresentation.icon}
               feedingColor={feedingPresentation.color}
+=======
+              feedingPostureDetected={receivedData.feedingPostureDetected}
+              pitchAngle={receivedData.pitchAngle}
+              withinFeedingWindow={withinFeedingWindow}
+>>>>>>> bedff2114937346b157106e289f951e098e49e3d
               status={currentStatus}
               onPress={handleOpenModal}
             />

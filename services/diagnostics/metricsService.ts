@@ -9,6 +9,8 @@ export const ACTIVITY_THRESHOLDS = {
   DISTRESS_MIN: 2.0,
 } as const;
 
+export const FEEDING_WINDOW_MINUTES = 5;
+
 export const DEFAULT_FEEDING_SCHEDULE: FeedingSchedule = {
   pigId: 'default',
   feedingsPerDay: 2,
@@ -48,9 +50,9 @@ export const isWithinFeedingWindow = (
   return schedule.feedingTimes.some((slot) => {
     const scheduledMinute = parseScheduleTime(slot);
     if (scheduledMinute < 0) return false;
-    const windowStart = scheduledMinute - schedule.feedingWindowBeforeMinutes;
-    const windowEnd = scheduledMinute + schedule.feedingWindowAfterMinutes;
-    return targetMinute >= windowStart && targetMinute <= windowEnd;
+    const windowStart = scheduledMinute;
+    const windowEnd = scheduledMinute + FEEDING_WINDOW_MINUTES;
+    return targetMinute >= windowStart && targetMinute < windowEnd;
   });
 };
 

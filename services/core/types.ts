@@ -13,6 +13,12 @@ export interface SensorDataPoint {
   humidity: number;
   activityIntensity: number;
   pitchAngle: number;
+  accelX?: number;
+  accelY?: number;
+  accelZ?: number;
+  gyroX?: number;
+  gyroY?: number;
+  gyroZ?: number;
   feedingPostureDetected: boolean;
   thi?: number;
   feverFlag?: boolean;
