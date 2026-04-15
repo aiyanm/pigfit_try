@@ -12,6 +12,11 @@ import {
 } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import {
+  FEVER_THRESHOLD_C,
+  HEAT_STRESS_THRESHOLD,
+  SEVERE_HEAT_THRESHOLD,
+} from '../services/diagnostics/metricsService';
+import {
   SensorDataPoint,
   backfillDeterministicInsightsV2,
   getCurrentHourlyAnalytics,
@@ -33,6 +38,7 @@ type PigId = 'LIVE-PIG-01' | 'LIVE-PIG-02' | 'LIVE-PIG-03';
 type TrendPeriod = '30m' | '1h' | '4h' | '12h';
 type BackfillRangePreset = '7d' | '30d' | 'all';
 const MIN_HOURLY_INSIGHTS_FOR_DAILY = 8;
+const CHART_HEIGHT = 100;
 
 const INSIGHT_STATUS_UI: Record<string, { badgeBg: string; badgeText: string; label: string }> = {
   normal: { badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
@@ -86,6 +92,27 @@ const formatDateOnly = (date: Date): string => {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+};
+
+const getTHIStatus = (value?: number): string => {
+  if (value == null || !Number.isFinite(value)) return 'No THI data';
+  if (value > SEVERE_HEAT_THRESHOLD) return 'Severe heat';
+  if (value >= HEAT_STRESS_THRESHOLD) return 'Heat stress';
+  return 'Comfortable';
+};
+
+const getTemperatureStatus = (value?: number): string => {
+  if (value == null || !Number.isFinite(value)) return 'No temperature data';
+  if (value > FEVER_THRESHOLD_C) return 'Fever risk';
+  if (value >= FEVER_THRESHOLD_C - 0.5) return 'Monitor closely';
+  return 'Normal range';
+};
+
+const getActivityStatus = (value?: number): string => {
+  if (value == null || !Number.isFinite(value)) return 'No activity data';
+  if (value < 1.05) return 'Low movement';
+  if (value >= 2) return 'High movement';
+  return 'Normal movement';
 };
 
 const getBackfillDateRange = (preset: BackfillRangePreset): { startDate: string; endDate: string; label: string } => {
@@ -357,14 +384,16 @@ const Analyze = () => {
     dataPointText: point.temp.toFixed(1),
   }));
 
+  const thiData = trendData.map(point => ({
+    value: Number(point.thi ?? 0),
+    dataPointText: Number(point.thi ?? 0).toFixed(1),
+  }));
+
   // Transform sensor data for activity chart
-  const activityData = trendData.map(point => {
-    const activity = point.activityIntensity * 10; // Scale for better visualization
-    return {
-      value: activity,
-      dataPointText: activity.toFixed(1),
-    };
-  });
+  const activityData = trendData.map(point => ({
+    value: point.activityIntensity,
+    dataPointText: point.activityIntensity.toFixed(2),
+  }));
 
   const pigs: { id: PigId; color: string }[] = [
     { id: 'LIVE-PIG-01', color: '#4CAF50' },
@@ -375,6 +404,85 @@ const Analyze = () => {
   const periods: TrendPeriod[] = ['30m', '1h', '4h', '12h'];
 
   const axisTextStyle = { fontSize: 10, color: '#666' };
+  const chartSpacing = (count: number) => (count > 10 ? (width - 100) / count : 45);
+  const latestTrendPoint = trendData.length > 0 ? trendData[trendData.length - 1] : null;
+
+  const renderTrendChartCard = ({
+    title,
+    latestValue,
+    latestLabel,
+    status,
+    statusClassName,
+    data,
+    lineColor,
+    fillStartColor,
+    fillEndColor,
+    loadingColor,
+    thresholdText,
+  }: {
+    title: string;
+    latestValue: string;
+    latestLabel: string;
+    status: string;
+    statusClassName: string;
+    data: { value: number; dataPointText: string }[];
+    lineColor: string;
+    fillStartColor: string;
+    fillEndColor: string;
+    loadingColor: string;
+    thresholdText: string;
+  }) => (
+    <View className="bg-white mx-4 mt-3 rounded-xl p-4 border border-gray-200">
+      <View className="flex-row justify-between items-start mb-4">
+        <View>
+          <Text className="text-sm font-semibold text-gray-900 mb-1">{title}</Text>
+          <Text className="text-xs text-gray-500">{latestLabel}</Text>
+        </View>
+        <View className="items-end">
+          <Text className="text-lg font-bold text-gray-900">{latestValue}</Text>
+          <Text className={`text-xs font-semibold mt-1 ${statusClassName}`}>{status}</Text>
+        </View>
+      </View>
+      {isLoading ? (
+        <View className="h-[100px] items-center justify-center">
+          <ActivityIndicator size="small" color={loadingColor} />
+          <Text className="text-xs text-gray-500 mt-2">Loading data...</Text>
+        </View>
+      ) : data.length > 0 ? (
+        <LineChart
+          data={data}
+          width={width - 80}
+          height={CHART_HEIGHT}
+          spacing={chartSpacing(data.length)}
+          color={lineColor}
+          thickness={2.5}
+          startFillColor={fillStartColor}
+          endFillColor={fillEndColor}
+          startOpacity={0.9}
+          endOpacity={0.12}
+          initialSpacing={10}
+          noOfSections={3}
+          yAxisColor="transparent"
+          xAxisColor="#E5E7EB"
+          yAxisTextStyle={axisTextStyle}
+          hideDataPoints
+          curved
+          areaChart
+          hideRules={false}
+          rulesColor="#F3F4F6"
+          rulesType="solid"
+        />
+      ) : (
+        <View className="h-[100px] items-center justify-center">
+          <Text className="text-xs text-gray-500">No data available</Text>
+        </View>
+      )}
+      <View className="flex-row justify-between items-center mt-3">
+        <Text className="text-[11px] text-gray-500">{thresholdText}</Text>
+        <View className="w-3 h-3 rounded-full" style={{ backgroundColor: lineColor }} />
+      </View>
+    </View>
+  );
 
   const renderInsightCard = (
     card: {
@@ -647,91 +755,62 @@ const Analyze = () => {
           </View>
         </View>
 
-        {/* Temperature Chart */}
-        <View className="bg-white mx-4 mt-2 rounded-xl p-4 border border-gray-200">
-          <Text className="text-sm font-semibold text-gray-900 mb-1">Temperature (°C)</Text>
-          <Text className="text-xs text-gray-500 mb-4">
-            {sensorData.length > 0 ? sensorData[sensorData.length - 1].temp.toFixed(1) : '--'}
-          </Text>
-          {isLoading ? (
-            <View className="h-[100px] items-center justify-center">
-              <ActivityIndicator size="small" color="#4CAF50" />
-              <Text className="text-xs text-gray-500 mt-2">Loading data...</Text>
-            </View>
-          ) : temperatureData.length > 0 ? (
-            <LineChart
-              data={temperatureData}
-              width={width - 80}
-              height={100}
-              spacing={temperatureData.length > 10 ? (width - 100) / temperatureData.length : 45}
-              color="#4CAF50"
-              thickness={2.5}
-              startFillColor="rgba(76, 175, 80, 0.15)"
-              endFillColor="rgba(76, 175, 80, 0.02)"
-              startOpacity={0.9}
-              endOpacity={0.1}
-              initialSpacing={10}
-              noOfSections={3}
-              yAxisColor="transparent"
-              xAxisColor="#E5E7EB"
-              yAxisTextStyle={axisTextStyle}
-              hideDataPoints={true}
-              curved
-              areaChart
-              hideRules={false}
-              rulesColor="#F3F4F6"
-              rulesType="solid"
-            />
-          ) : (
-            <View className="h-[100px] items-center justify-center">
-              <Text className="text-xs text-gray-500">No data available</Text>
-            </View>
-          )}
-          <View className="flex-row justify-end mt-2">
-            {/* <Text className="text-xs text-red-500">Fever threshold</Text> */}
-          </View>
-        </View>
+        {renderTrendChartCard({
+          title: 'THI',
+          latestValue: latestTrendPoint?.thi != null ? latestTrendPoint.thi.toFixed(1) : '--',
+          latestLabel: 'Aggregated temperature-humidity stress',
+          status: getTHIStatus(latestTrendPoint?.thi),
+          statusClassName:
+            latestTrendPoint?.thi != null && latestTrendPoint.thi > SEVERE_HEAT_THRESHOLD
+              ? 'text-red-600'
+              : latestTrendPoint?.thi != null && latestTrendPoint.thi >= HEAT_STRESS_THRESHOLD
+                ? 'text-amber-600'
+                : 'text-emerald-600',
+          data: thiData,
+          lineColor: '#D97706',
+          fillStartColor: 'rgba(217, 119, 6, 0.28)',
+          fillEndColor: 'rgba(245, 158, 11, 0.05)',
+          loadingColor: '#D97706',
+          thresholdText: `Warning at ${HEAT_STRESS_THRESHOLD} • Severe at ${SEVERE_HEAT_THRESHOLD}`,
+        })}
 
-        {/* Activity Index Chart */}
-        <View className="bg-white mx-4 mt-3 rounded-xl p-4 border border-gray-200">
-          <Text className="text-sm font-semibold text-gray-900 mb-1">Activity Index</Text>
-          <Text className="text-xs text-gray-500 mb-4">
-            {activityData.length > 0 ? activityData[activityData.length - 1].value.toFixed(1) : '--'}
-          </Text>
-          {isLoading ? (
-            <View className="h-[100px] items-center justify-center">
-              <ActivityIndicator size="small" color="#4CAF50" />
-            </View>
-          ) : activityData.length > 0 ? (
-            <LineChart
-              data={activityData}
-              width={width - 80}
-              height={100}
-              spacing={activityData.length > 10 ? (width - 100) / activityData.length : 45}
-              color="#4CAF50"
-              thickness={2.5}
-              startFillColor="rgba(76, 175, 80, 0.3)"
-              endFillColor="rgba(76, 175, 80, 0.05)"
-              startOpacity={0.9}
-              endOpacity={0.1}
-              initialSpacing={10}
-              noOfSections={3}
-              yAxisColor="transparent"
-              xAxisColor="#E5E7EB"
-              yAxisTextStyle={axisTextStyle}
-              hideDataPoints={true}
-              curved
-              areaChart
-              hideRules={false}
-              rulesColor="#F3F4F6"
-              rulesType="solid"
-            />
-          ) : (
-            <View className="h-[100px] items-center justify-center">
-              <Text className="text-xs text-gray-500">No data available</Text>
-            </View>
-          )}
-        </View>
+        {renderTrendChartCard({
+          title: 'Pig Temperature (°C)',
+          latestValue: latestTrendPoint ? latestTrendPoint.temp.toFixed(1) : '--',
+          latestLabel: 'Body temperature trend',
+          status: getTemperatureStatus(latestTrendPoint?.temp),
+          statusClassName:
+            latestTrendPoint != null && latestTrendPoint.temp > FEVER_THRESHOLD_C
+              ? 'text-red-600'
+              : latestTrendPoint != null && latestTrendPoint.temp >= FEVER_THRESHOLD_C - 0.5
+                ? 'text-amber-600'
+                : 'text-emerald-600',
+          data: temperatureData,
+          lineColor: '#DC2626',
+          fillStartColor: 'rgba(220, 38, 38, 0.20)',
+          fillEndColor: 'rgba(248, 113, 113, 0.04)',
+          loadingColor: '#DC2626',
+          thresholdText: `Fever threshold at ${FEVER_THRESHOLD_C.toFixed(1)}°C`,
+        })}
+
+        {renderTrendChartCard({
+          title: 'Activity',
+          latestValue: latestTrendPoint ? latestTrendPoint.activityIntensity.toFixed(2) : '--',
+          latestLabel: 'Movement intensity trend',
+          status: getActivityStatus(latestTrendPoint?.activityIntensity),
+          statusClassName:
+            latestTrendPoint != null && latestTrendPoint.activityIntensity < 1.05
+              ? 'text-amber-600'
+              : latestTrendPoint != null && latestTrendPoint.activityIntensity >= 2
+                ? 'text-sky-700'
+                : 'text-emerald-600',
+          data: activityData,
+          lineColor: '#0284C7',
+          fillStartColor: 'rgba(2, 132, 199, 0.24)',
+          fillEndColor: 'rgba(56, 189, 248, 0.05)',
+          loadingColor: '#0284C7',
+          thresholdText: 'Low under 1.05 • High at 2.00+',
+        })}
 
 
         {/* Events & Alerts Section */}

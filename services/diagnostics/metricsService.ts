@@ -56,14 +56,16 @@ export const isWithinFeedingWindow = (
 
 export const buildRawRiskLabel = (point: Pick<
   SensorDataPoint,
-  'temp' | 'activityIntensity' | 'humidity' | 'envTemp' | 'feedingPostureDetected'
->): string => {
+  'temp' | 'activityIntensity' | 'humidity' | 'envTemp'
+> & {
+  trueEatingEvent: boolean;
+}): string => {
   const thi = calculateTHI(point.envTemp, point.humidity);
   if (thi > SEVERE_HEAT_THRESHOLD) return 'severe_heat';
   if (thi >= HEAT_STRESS_THRESHOLD) return 'heat_stress';
   if (point.temp > FEVER_THRESHOLD_C) return 'fever';
   if (point.activityIntensity < ACTIVITY_THRESHOLDS.LETHARGY_MAX) return 'lethargy';
-  if (point.feedingPostureDetected) return 'feeding_posture';
+  if (point.trueEatingEvent) return 'feeding_posture';
   return 'normal';
 };
 
@@ -74,6 +76,7 @@ export const tagSensorDataPoint = (
   const thi = calculateTHI(point.envTemp, point.humidity);
   const withinFeedingWindow = isWithinFeedingWindow(point.timestamp, schedule);
   const activityState = classifyActivityState(point.activityIntensity);
+  const trueEatingEvent = point.feedingPostureDetected && withinFeedingWindow;
 
   return {
     ...point,
@@ -84,7 +87,10 @@ export const tagSensorDataPoint = (
     heatStressFlag: thi >= HEAT_STRESS_THRESHOLD,
     severeHeatFlag: thi > SEVERE_HEAT_THRESHOLD,
     withinFeedingWindow,
-    trueEatingEvent: point.feedingPostureDetected && withinFeedingWindow,
-    rawRiskLabel: buildRawRiskLabel(point),
+    trueEatingEvent,
+    rawRiskLabel: buildRawRiskLabel({
+      ...point,
+      trueEatingEvent,
+    }),
   };
 };

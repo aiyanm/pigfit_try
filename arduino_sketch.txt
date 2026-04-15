@@ -27,6 +27,10 @@ const char *BLE_CHARACTERISTIC_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
 #define PACKET_SIZE 32
 #define MAGIC_NUMBER 0xAA
 #define PACKET_VERSION 0x01
+#define DS18B20_CONVERSION_MS 750
+#define FEEDING_PITCH_THRESHOLD_DEG 45.0f
+#define LOW_MOTION_THRESHOLD 0.12f
+#define FEEDING_DETECT_CONSECUTIVE 2
 
 // Create BLE Service and Characteristic
 BLEService pigFitService(BLE_SERVICE_UUID);
@@ -41,7 +45,10 @@ float imu_accel_y = 0.0f;
 float imu_accel_z = 0.0f;
 float activityIntensity = 0.0f; // Calculated from acceleration magnitude
 float pitchAngle = 0.0f;        // Calculated from accelerometer
-float feed_amount = 2.1f;
+bool feedingPostureDetected = false;
+bool hs300xReady = false;
+bool imuReady = false;
+uint8_t feedingGoodSamples = 0;
 
 // Binary packet buffer
 uint8_t packet[PACKET_SIZE];
@@ -65,18 +72,20 @@ void setup()
 
 void initializeSensors()
 {
-  if (!HS300x.begin())
+  hs300xReady = HS300x.begin();
+  if (!hs300xReady)
   {
-    Serial.println("FATAL: HS300x failed!");
+    Serial.println("ERROR: HS300x failed!");
   }
   else
   {
     Serial.println("✓ HS300x OK");
   }
 
-  if (!IMU.begin())
+  imuReady = IMU.begin();
+  if (!imuReady)
   {
-    Serial.println("FATAL: IMU failed!");
+    Serial.println("ERROR: IMU failed!");
   }
   else
   {
@@ -138,9 +147,14 @@ void loop()
       Serial.print(PACKET_SIZE);
       Serial.println(" bytes...");
 
-      dataCharacteristic.writeValue(packet, PACKET_SIZE);
-
-      Serial.println("✓ Binary packet sent");
+      if (dataCharacteristic.writeValue(packet, PACKET_SIZE))
+      {
+        Serial.println("✓ Binary packet sent");
+      }
+      else
+      {
+        Serial.println("ERROR: BLE packet send failed");
+      }
 
       // Start next DS18B20 conversion NOW so it completes during the delay (~750ms)
       if (device.IsValid())
@@ -148,7 +162,7 @@ void loop()
         device.Update(bus);
       }
 
-      delay(250); // Reduced: conversion takes ~750ms, total cycle ~1s
+      delay(DS18B20_CONVERSION_MS);
     }
 
     Serial.println("Disconnected");
@@ -168,8 +182,16 @@ void loop()
 void readSensors()
 {
   // Read HS300x
-  humidity = HS300x.readHumidity();
-  hs300x_temp = HS300x.readTemperature();
+  if (hs300xReady)
+  {
+    humidity = HS300x.readHumidity();
+    hs300x_temp = HS300x.readTemperature();
+  }
+  else
+  {
+    humidity = 0.0f;
+    hs300x_temp = 0.0f;
+  }
 
   // Read DS18B20 - reads result of PREVIOUS conversion (non-blocking)
   if (device.IsValid())
@@ -193,7 +215,7 @@ void readSensors()
   }
 
   // Read IMU
-  if (IMU.accelerationAvailable())
+  if (imuReady && IMU.accelerationAvailable())
   {
     IMU.readAcceleration(imu_accel_x, imu_accel_y, imu_accel_z);
 
@@ -207,12 +229,36 @@ void readSensors()
     // Formula: atan2(Z, sqrt(X^2 + Y^2)) * 180/PI
     float xy_magnitude = sqrt(imu_accel_x * imu_accel_x + imu_accel_y * imu_accel_y);
     pitchAngle = atan2(imu_accel_z, xy_magnitude) * 180.0 / PI;
+
+    float motionLevel = fabs(activityIntensity - 1.0f);
+    bool headDown = pitchAngle < FEEDING_PITCH_THRESHOLD_DEG;
+    bool lowMotion = motionLevel < LOW_MOTION_THRESHOLD;
+
+    if (headDown && lowMotion)
+    {
+      if (feedingGoodSamples < FEEDING_DETECT_CONSECUTIVE)
+      {
+        feedingGoodSamples++;
+      }
+    }
+    else
+    {
+      feedingGoodSamples = 0;
+      feedingPostureDetected = false;
+    }
+
+    if (feedingGoodSamples >= FEEDING_DETECT_CONSECUTIVE)
+    {
+      feedingPostureDetected = true;
+    }
   }
   else
   {
     imu_accel_x = imu_accel_y = imu_accel_z = 0.0f;
     activityIntensity = 0.0f;
     pitchAngle = 0.0f;
+    feedingGoodSamples = 0;
+    feedingPostureDetected = false;
   }
 }
 
@@ -235,7 +281,7 @@ uint16_t calculateCRC16(const uint8_t *data, uint8_t length)
         crc = (crc << 1) ^ 0x1021;
       }
       else
-      {
+      { 
         crc <<= 1;
       }
     }
@@ -270,13 +316,11 @@ void packageDataToBinary()
   writeFloat(packet, 14, activityIntensity); // Activity Intensity = sqrt(x^2 + y^2 + z^2) (bytes 14-17)
   writeFloat(packet, 18, pitchAngle);        // Pitch Angle in degrees (bytes 18-21)
 
-  // Feed amount (3 bytes: uint16 for integer part + uint8 for decimal)
-  uint16_t feed_int = (uint16_t)feed_amount;
-  uint8_t feed_dec = (uint8_t)((feed_amount - feed_int) * 100);
-  writeUint16(packet, 22, feed_int);
-  packet[24] = feed_dec;
+  packet[22] = feedingPostureDetected ? 1 : 0;
 
-  // Padding (bytes 25-29 unused)
+  // Padding (bytes 23-29 unused)
+  packet[23] = 0;
+  packet[24] = 0;
   packet[25] = 0;
   packet[26] = 0;
   packet[27] = 0;

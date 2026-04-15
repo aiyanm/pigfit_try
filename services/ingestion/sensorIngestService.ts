@@ -360,6 +360,7 @@ export const loadTrendData = async (periodType: TrendPeriod, pigId: string): Pro
         activityIntensity: row.mean_activity ?? 0,
         pitchAngle: row.mean_pitch ?? 0,
         feedingPostureDetected: false,
+        thi: row.thi == null ? undefined : Number(row.thi),
       }));
     }
 
@@ -370,7 +371,11 @@ export const loadTrendData = async (periodType: TrendPeriod, pigId: string): Pro
       '12h': 12,
     };
 
-    return loadSensorData(periodHoursMap[periodType], pigId);
+    const rawRows = await loadSensorData(periodHoursMap[periodType], pigId);
+    return rawRows.map((row) => ({
+      ...row,
+      thi: row.thi ?? calculateTHI(Number(row.envTemp ?? 0), Number(row.humidity ?? 0)),
+    }));
   } catch (error) {
     console.error('❌ Error loading trend data:', error);
     return [];
