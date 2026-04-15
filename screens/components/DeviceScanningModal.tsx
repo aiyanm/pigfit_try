@@ -8,53 +8,47 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import type { BLEConnectionStatus, BLEScanStatus } from '../../useBLE';
 
 interface DeviceScanningModalProps {
   isVisible: boolean;
-  isScanning: boolean;
+  scanStatus: BLEScanStatus;
+  connectionStatus: BLEConnectionStatus;
+  bleError?: string | null;
   onCancel: () => void;
   onConnected?: () => void;
 }
 
 const DeviceScanningModal = ({
   isVisible,
-  isScanning,
+  scanStatus,
+  connectionStatus,
+  bleError,
   onCancel,
   onConnected,
 }: DeviceScanningModalProps) => {
-  const [scanTimeout, setScanTimeout] = useState(false);
+  const [acknowledgedSuccess, setAcknowledgedSuccess] = useState(false);
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
+  const isBusy = scanStatus === 'scanning' || connectionStatus === 'connecting';
+  const isConnected = connectionStatus === 'connected';
+  const isTimeout = scanStatus === 'timeout';
+  const isError = scanStatus === 'error' || connectionStatus === 'error';
 
-  // Auto-close if device connected
   useEffect(() => {
-    if (isVisible && !isScanning) {
-      // Delay to show success state before closing
+    if (isVisible && isConnected && !acknowledgedSuccess) {
       const timer = setTimeout(() => {
+        setAcknowledgedSuccess(true);
         onConnected?.();
       }, 1500);
       return () => clearTimeout(timer);
     }
-  }, [isScanning, isVisible, onConnected]);
-
-  // Scan timeout after 30 seconds
-  useEffect(() => {
     if (!isVisible) {
-      setScanTimeout(false);
-      return;
+      setAcknowledgedSuccess(false);
     }
+  }, [acknowledgedSuccess, isConnected, isVisible, onConnected]);
 
-    const timeoutId = setTimeout(() => {
-      if (isScanning) {
-        setScanTimeout(true);
-      }
-    }, 30000);
-
-    return () => clearTimeout(timeoutId);
-  }, [isVisible, isScanning]);
-
-  // Pulse animation for the bluetooth icon
   useEffect(() => {
-    if (isScanning && !scanTimeout) {
+    if (isBusy) {
       Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
@@ -69,11 +63,14 @@ const DeviceScanningModal = ({
           }),
         ])
       ).start();
+    } else {
+      pulseAnim.stopAnimation();
+      pulseAnim.setValue(1);
     }
-  }, [isScanning, scanTimeout, pulseAnim]);
+  }, [isBusy, pulseAnim]);
 
   const handleCancel = () => {
-    setScanTimeout(false);
+    setAcknowledgedSuccess(false);
     onCancel();
   };
 
@@ -82,7 +79,7 @@ const DeviceScanningModal = ({
       <View className="flex-1 bg-black/50 justify-center items-center">
         <View className="bg-white rounded-3xl p-8 items-center w-4/5 max-w-sm">
           {/* Bluetooth Icon with Pulse Animation */}
-          {isScanning && !scanTimeout ? (
+          {isBusy ? (
             <>
               <Animated.View
                 style={{
@@ -98,14 +95,16 @@ const DeviceScanningModal = ({
               </Animated.View>
 
               <Text className="text-xl font-semibold text-gray-900 mb-2">
-                Searching for Device
+                {connectionStatus === 'connecting' ? 'Connecting to Device' : 'Searching for Device'}
               </Text>
               <Text className="text-gray-600 text-center mb-6 text-sm">
-                Looking for PigFit_Device...
+                {connectionStatus === 'connecting'
+                  ? 'Setting up your PigFit device connection...'
+                  : 'Looking for PigFit_Device...'}
               </Text>
               <ActivityIndicator size="large" color="#3b82f6" />
             </>
-          ) : !scanTimeout && !isScanning ? (
+          ) : isConnected ? (
             /* Success State */
             <>
               <View className="w-20 h-20 bg-green-100 rounded-full items-center justify-center mb-6">
@@ -127,10 +126,10 @@ const DeviceScanningModal = ({
               </View>
 
               <Text className="text-xl font-semibold text-gray-900 mb-2">
-                Device Not Found
+                {isTimeout ? 'Device Not Found' : 'Bluetooth Error'}
               </Text>
               <Text className="text-gray-600 text-center mb-6 text-sm">
-                Could not find PigFit device. Please ensure your device is powered on and in range.
+                {bleError || 'Could not find PigFit device. Please ensure your device is powered on and in range.'}
               </Text>
 
               <TouchableOpacity
@@ -143,7 +142,7 @@ const DeviceScanningModal = ({
           )}
 
           {/* Cancel Button (shown during scanning) */}
-          {isScanning && !scanTimeout && (
+          {isBusy && (
             <TouchableOpacity
               className="w-full mt-6 border border-gray-300 rounded-xl py-3"
               onPress={handleCancel}
@@ -153,7 +152,7 @@ const DeviceScanningModal = ({
           )}
 
           {/* Close Button (shown on success) */}
-          {!isScanning && !scanTimeout && (
+          {isConnected && (
             <TouchableOpacity
               className="w-full mt-6 bg-blue-500 rounded-xl py-3"
               onPress={handleCancel}
@@ -163,7 +162,7 @@ const DeviceScanningModal = ({
           )}
 
           {/* Close Button (shown on error) */}
-          {scanTimeout && (
+          {(isTimeout || isError) && (
             <TouchableOpacity
               className="w-full mt-4 border border-gray-300 rounded-xl py-3"
               onPress={handleCancel}

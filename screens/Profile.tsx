@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useBLEContext } from '../providers/BLEProvider';
 import DeviceScanningModal from './components/DeviceScanningModal';
 
@@ -95,48 +95,53 @@ export default function Profile() {
     updateConnectedDeviceName,
     requestPermissions,
     scanForPeripherals,
-    allDevices,
+    cancelScan,
+    scanStatus,
+    connectionStatus,
+    bleError,
+    clearBleError,
   } = useBLEContext();
   
   const [showScanningModal, setShowScanningModal] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
 
   const handlePairDevice = async () => {
+    clearBleError();
     setShowScanningModal(true);
-    setIsScanning(true);
     
     try {
       const granted = await requestPermissions();
       if (granted) {
-        scanForPeripherals();
+        await scanForPeripherals();
       } else {
         Alert.alert('Permission Denied', 'Bluetooth permissions are required to pair a device');
         setShowScanningModal(false);
-        setIsScanning(false);
       }
     } catch (error) {
       console.error('Error requesting permissions:', error);
       setShowScanningModal(false);
-      setIsScanning(false);
     }
   };
 
   const handleModalCancel = () => {
+    cancelScan();
     setShowScanningModal(false);
-    setIsScanning(false);
   };
 
   const handleModalConnected = () => {
     setShowScanningModal(false);
-    setIsScanning(false);
   };
 
-  // Monitor connectedDevice changes to update scanning state
   useEffect(() => {
-    if (connectedDevice && isScanning) {
-      setIsScanning(false);
+    if (!showScanningModal) return;
+
+    if (connectionStatus === 'connected') {
+      return;
     }
-  }, [connectedDevice, isScanning]);
+
+    if (scanStatus === 'timeout' || scanStatus === 'error' || connectionStatus === 'error') {
+      setShowScanningModal(true);
+    }
+  }, [connectionStatus, scanStatus, showScanningModal]);
   
   return (
     <ScrollView className="flex-1 bg-gray-50">
@@ -232,7 +237,9 @@ export default function Profile() {
       {/* Device Scanning Modal */}
       <DeviceScanningModal
         isVisible={showScanningModal}
-        isScanning={isScanning}
+        scanStatus={scanStatus}
+        connectionStatus={connectionStatus}
+        bleError={bleError}
         onCancel={handleModalCancel}
         onConnected={handleModalConnected}
       />
