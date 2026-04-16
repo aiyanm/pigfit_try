@@ -137,6 +137,7 @@ class DatabaseService {
   private isInitializing: boolean = false;
   private initPromise: Promise<void> | null = null;
   private dataQueue: Array<() => Promise<void>> = [];
+  private isProcessingQueue: boolean = false;
 
   private async getUserVersion(): Promise<number> {
     if (!this.db) throw new Error('Database not initialized');
@@ -301,6 +302,9 @@ class DatabaseService {
   private async _performInitialization(): Promise<void> {
     try {
       this.db = await SQLite.openDatabaseAsync('pigfit_data.db');
+      await this.db.execAsync('PRAGMA journal_mode = WAL;');
+      await this.db.execAsync('PRAGMA busy_timeout = 5000;');
+      await this.db.execAsync('PRAGMA synchronous = NORMAL;');
       await this.createTables();
     } catch (error) {
       console.error('❌ Error in database initialization:', error);
@@ -329,6 +333,11 @@ class DatabaseService {
    * Process queued data operations
    */
   private async _processQueue(): Promise<void> {
+    if (this.isProcessingQueue) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
     while (this.dataQueue.length > 0) {
       const operation = this.dataQueue.shift();
       if (operation) {
@@ -339,6 +348,25 @@ class DatabaseService {
         }
       }
     }
+    this.isProcessingQueue = false;
+  }
+
+  private async enqueueWriteOperation(operation: () => Promise<void>): Promise<void> {
+    await this._ensureInitialized();
+
+    return new Promise((resolve, reject) => {
+      this.dataQueue.push(async () => {
+        try {
+          await operation();
+          resolve();
+        } catch (error) {
+          reject(error);
+          throw error;
+        }
+      });
+
+      void this._processQueue();
+    });
   }
 
   /**
@@ -621,67 +649,68 @@ class DatabaseService {
    */
   async upsertPeriodAggregate(data: PeriodAggregate): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
-        `INSERT INTO period_aggregates
-         (period_type, bucket_start, bucket_end, pig_id,
-          mean_temp, mean_env_temp, mean_humidity,
-          mean_activity, mean_pitch,
-          thi, lethargy_alert, dominant_activity_state, sample_count,
-          max_temp, max_thi, fever_event_count, heat_stress_event_count,
-          severe_heat_event_count, true_eating_event_count,
-          resting_ratio, standing_ratio, distress_ratio)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(period_type, bucket_start, pig_id) DO UPDATE SET
-           bucket_end              = excluded.bucket_end,
-           mean_temp               = excluded.mean_temp,
-           mean_env_temp           = excluded.mean_env_temp,
-           mean_humidity           = excluded.mean_humidity,
-           mean_activity           = excluded.mean_activity,
-           mean_pitch              = excluded.mean_pitch,
-           thi                     = excluded.thi,
-           lethargy_alert          = excluded.lethargy_alert,
-           dominant_activity_state = excluded.dominant_activity_state,
-           sample_count            = excluded.sample_count,
-           max_temp                = excluded.max_temp,
-           max_thi                 = excluded.max_thi,
-           fever_event_count       = excluded.fever_event_count,
-           heat_stress_event_count = excluded.heat_stress_event_count,
-           severe_heat_event_count = excluded.severe_heat_event_count,
-           true_eating_event_count = excluded.true_eating_event_count,
-           resting_ratio           = excluded.resting_ratio,
-           standing_ratio          = excluded.standing_ratio,
-           distress_ratio          = excluded.distress_ratio`,
-        [
-          data.period_type,
-          data.bucket_start,
-          data.bucket_end,
-          data.pig_id,
-          data.mean_temp,
-          data.mean_env_temp,
-          data.mean_humidity,
-          data.mean_activity,
-          data.mean_pitch,
-          data.thi ?? null,
-          data.lethargy_alert ?? 0,
-          data.dominant_activity_state ?? 'Resting',
-          data.sample_count,
-          data.max_temp ?? null,
-          data.max_thi ?? null,
-          data.fever_event_count ?? 0,
-          data.heat_stress_event_count ?? 0,
-          data.severe_heat_event_count ?? 0,
-          data.true_eating_event_count ?? 0,
-          data.resting_ratio ?? 0,
-          data.standing_ratio ?? 0,
-          data.distress_ratio ?? 0,
-        ]
-      );
+        await this.db.runAsync(
+          `INSERT INTO period_aggregates
+           (period_type, bucket_start, bucket_end, pig_id,
+            mean_temp, mean_env_temp, mean_humidity,
+            mean_activity, mean_pitch,
+            thi, lethargy_alert, dominant_activity_state, sample_count,
+            max_temp, max_thi, fever_event_count, heat_stress_event_count,
+            severe_heat_event_count, true_eating_event_count,
+            resting_ratio, standing_ratio, distress_ratio)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(period_type, bucket_start, pig_id) DO UPDATE SET
+             bucket_end              = excluded.bucket_end,
+             mean_temp               = excluded.mean_temp,
+             mean_env_temp           = excluded.mean_env_temp,
+             mean_humidity           = excluded.mean_humidity,
+             mean_activity           = excluded.mean_activity,
+             mean_pitch              = excluded.mean_pitch,
+             thi                     = excluded.thi,
+             lethargy_alert          = excluded.lethargy_alert,
+             dominant_activity_state = excluded.dominant_activity_state,
+             sample_count            = excluded.sample_count,
+             max_temp                = excluded.max_temp,
+             max_thi                 = excluded.max_thi,
+             fever_event_count       = excluded.fever_event_count,
+             heat_stress_event_count = excluded.heat_stress_event_count,
+             severe_heat_event_count = excluded.severe_heat_event_count,
+             true_eating_event_count = excluded.true_eating_event_count,
+             resting_ratio           = excluded.resting_ratio,
+             standing_ratio          = excluded.standing_ratio,
+             distress_ratio          = excluded.distress_ratio`,
+          [
+            data.period_type,
+            data.bucket_start,
+            data.bucket_end,
+            data.pig_id,
+            data.mean_temp,
+            data.mean_env_temp,
+            data.mean_humidity,
+            data.mean_activity,
+            data.mean_pitch,
+            data.thi ?? null,
+            data.lethargy_alert ?? 0,
+            data.dominant_activity_state ?? 'Resting',
+            data.sample_count,
+            data.max_temp ?? null,
+            data.max_thi ?? null,
+            data.fever_event_count ?? 0,
+            data.heat_stress_event_count ?? 0,
+            data.severe_heat_event_count ?? 0,
+            data.true_eating_event_count ?? 0,
+            data.resting_ratio ?? 0,
+            data.standing_ratio ?? 0,
+            data.distress_ratio ?? 0,
+          ]
+        );
+      });
     } catch (error) {
       console.error('❌ Error upserting period aggregate:', error);
-      this.dataQueue.push(() => this.upsertPeriodAggregate(data));
+      throw error;
     }
   }
 
@@ -712,49 +741,46 @@ class DatabaseService {
    */
   async insertSensorData(data: SensorData): Promise<void> {
     try {
-      // Ensure database is initialized
-      await this._ensureInitialized();
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) {
+          throw new Error('Database connection is null');
+        }
 
-      if (!this.db) {
-        throw new Error('Database connection is null');
-      }
-
-      await this.db.runAsync(
-        `INSERT INTO sensor_data 
-         (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z, feeding_posture_detected, env_temp, humidity, thi, fever_flag, lethargy_flag, heat_stress_flag, severe_heat_flag, within_feeding_window, true_eating_event, raw_risk_label) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          data.timestamp,
-          data.device_id,
-          data.pig_id,
-          data.temp,
-          data.activity_intensity,
-          data.activity_state ?? 'Resting/Lethargy',
-          data.pitch_angle,
-          data.accel_x ?? null,
-          data.accel_y ?? null,
-          data.accel_z ?? null,
-          data.gyro_x ?? null,
-          data.gyro_y ?? null,
-          data.gyro_z ?? null,
-          data.feeding_posture_detected,
-          data.env_temp,
-          data.humidity,
-          data.thi ?? null,
-          data.fever_flag ?? 0,
-          data.lethargy_flag ?? 0,
-          data.heat_stress_flag ?? 0,
-          data.severe_heat_flag ?? 0,
-          data.within_feeding_window ?? 0,
-          data.true_eating_event ?? 0,
-          data.raw_risk_label ?? 'normal',
-        ]
-      );
-      console.log('✅ Sensor data inserted');
+        await this.db.runAsync(
+          `INSERT INTO sensor_data 
+           (timestamp, device_id, pig_id, temp, activity_intensity, activity_state, pitch_angle, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z, feeding_posture_detected, env_temp, humidity, thi, fever_flag, lethargy_flag, heat_stress_flag, severe_heat_flag, within_feeding_window, true_eating_event, raw_risk_label) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            data.timestamp,
+            data.device_id,
+            data.pig_id,
+            data.temp,
+            data.activity_intensity,
+            data.activity_state ?? 'Resting/Lethargy',
+            data.pitch_angle,
+            data.accel_x ?? null,
+            data.accel_y ?? null,
+            data.accel_z ?? null,
+            data.gyro_x ?? null,
+            data.gyro_y ?? null,
+            data.gyro_z ?? null,
+            data.feeding_posture_detected,
+            data.env_temp,
+            data.humidity,
+            data.thi ?? null,
+            data.fever_flag ?? 0,
+            data.lethargy_flag ?? 0,
+            data.heat_stress_flag ?? 0,
+            data.severe_heat_flag ?? 0,
+            data.within_feeding_window ?? 0,
+            data.true_eating_event ?? 0,
+            data.raw_risk_label ?? 'normal',
+          ]
+        );
+      });
     } catch (error) {
       console.error('❌ Error inserting sensor data:', error);
-      // Don't throw - allow app to continue, but queue for retry
-      this.dataQueue.push(() => this.insertSensorData(data));
+      throw error;
     }
   }
 
@@ -763,14 +789,12 @@ class DatabaseService {
    */
   async upsertHourlyAggregate(data: HourlyAggregate): Promise<void> {
     try {
-      // Ensure database is initialized
-      await this._ensureInitialized();
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) {
+          throw new Error('Database connection is null');
+        }
 
-      if (!this.db) {
-        throw new Error('Database connection is null');
-      }
-
-      await this.db.runAsync(
+        await this.db.runAsync(
         `INSERT INTO hourly_aggregates 
          (date, hour, pig_id, mean_temp, mean_env_temp, mean_humidity, mean_activity, mean_pitch, sample_count, thi, lethargy_alert, dominant_activity_state, max_temp, max_thi, fever_event_count, heat_stress_event_count, severe_heat_event_count, true_eating_event_count, resting_ratio, standing_ratio, distress_ratio, feeding_schedule_adherence, high_risk_hour_flag)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -795,37 +819,36 @@ class DatabaseService {
            distress_ratio = excluded.distress_ratio,
            feeding_schedule_adherence = excluded.feeding_schedule_adherence,
            high_risk_hour_flag = excluded.high_risk_hour_flag`,
-        [
-          data.date,
-          data.hour,
-          data.pig_id,
-          data.mean_temp,
-          data.mean_env_temp,
-          data.mean_humidity,
-          data.mean_activity,
-          data.mean_pitch,
-          data.sample_count ?? 0,
-          data.thi || null,
-          data.lethargy_alert || 0,
-          data.dominant_activity_state ?? 'Resting',
-          data.max_temp ?? null,
-          data.max_thi ?? null,
-          data.fever_event_count ?? 0,
-          data.heat_stress_event_count ?? 0,
-          data.severe_heat_event_count ?? 0,
-          data.true_eating_event_count ?? 0,
-          data.resting_ratio ?? 0,
-          data.standing_ratio ?? 0,
-          data.distress_ratio ?? 0,
-          data.feeding_schedule_adherence ?? 0,
-          data.high_risk_hour_flag ?? 0,
-        ]
-      );
-      console.log('✅ Hourly aggregate upserted');
+          [
+            data.date,
+            data.hour,
+            data.pig_id,
+            data.mean_temp,
+            data.mean_env_temp,
+            data.mean_humidity,
+            data.mean_activity,
+            data.mean_pitch,
+            data.sample_count ?? 0,
+            data.thi || null,
+            data.lethargy_alert || 0,
+            data.dominant_activity_state ?? 'Resting',
+            data.max_temp ?? null,
+            data.max_thi ?? null,
+            data.fever_event_count ?? 0,
+            data.heat_stress_event_count ?? 0,
+            data.severe_heat_event_count ?? 0,
+            data.true_eating_event_count ?? 0,
+            data.resting_ratio ?? 0,
+            data.standing_ratio ?? 0,
+            data.distress_ratio ?? 0,
+            data.feeding_schedule_adherence ?? 0,
+            data.high_risk_hour_flag ?? 0,
+          ]
+        );
+      });
     } catch (error) {
       console.error('❌ Error upserting hourly aggregate:', error);
-      // Queue for retry instead of throwing
-      this.dataQueue.push(() => this.upsertHourlyAggregate(data));
+      throw error;
     }
   }
 
@@ -861,20 +884,20 @@ class DatabaseService {
     rawRiskLabel: string
   ): Promise<void> {
     try {
-      await this._ensureInitialized();
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) {
+          throw new Error('Database connection is null');
+        }
 
-      if (!this.db) {
-        throw new Error('Database connection is null');
-      }
-
-      await this.db.runAsync(
-        `UPDATE sensor_data
-         SET within_feeding_window = ?,
-             true_eating_event = ?,
-             raw_risk_label = ?
-         WHERE id = ?`,
-        [withinFeedingWindow, trueEatingEvent, rawRiskLabel, id]
-      );
+        await this.db.runAsync(
+          `UPDATE sensor_data
+           SET within_feeding_window = ?,
+               true_eating_event = ?,
+               raw_risk_label = ?
+           WHERE id = ?`,
+          [withinFeedingWindow, trueEatingEvent, rawRiskLabel, id]
+        );
+      });
     } catch (error) {
       console.error('❌ Error updating sensor feeding fields:', error);
       throw error;
@@ -911,10 +934,10 @@ class DatabaseService {
    */
   async upsertHourlyInsight(data: HourlyInsight): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
+        await this.db.runAsync(
         `INSERT INTO hourly_insights
          (pig_id, bucket_start, bucket_end, bucket_date, bucket_hour,
           severity, summary, confidence, insight_json,
@@ -942,32 +965,33 @@ class DatabaseService {
            error_code = excluded.error_code,
            error_message = excluded.error_message,
            updated_at = CURRENT_TIMESTAMP`,
-        [
-          data.pig_id,
-          data.bucket_start,
-          data.bucket_end,
-          data.bucket_date,
-          data.bucket_hour,
-          data.severity,
-          data.summary,
-          data.confidence ?? null,
-          data.insight_json,
-          data.source_hash,
-          data.source_hourly_aggregate_id ?? null,
-          data.schema_version,
-          data.prompt_version,
-          data.model_version,
-          data.status,
-          data.rule_case ?? null,
-          data.rule_severity ?? null,
-          data.rule_reasoning_json ?? null,
-          data.error_code ?? null,
-          data.error_message ?? null,
-        ]
-      );
+          [
+            data.pig_id,
+            data.bucket_start,
+            data.bucket_end,
+            data.bucket_date,
+            data.bucket_hour,
+            data.severity,
+            data.summary,
+            data.confidence ?? null,
+            data.insight_json,
+            data.source_hash,
+            data.source_hourly_aggregate_id ?? null,
+            data.schema_version,
+            data.prompt_version,
+            data.model_version,
+            data.status,
+            data.rule_case ?? null,
+            data.rule_severity ?? null,
+            data.rule_reasoning_json ?? null,
+            data.error_code ?? null,
+            data.error_message ?? null,
+          ]
+        );
+      });
     } catch (error) {
       console.error('❌ Error upserting hourly insight:', error);
-      this.dataQueue.push(() => this.upsertHourlyInsight(data));
+      throw error;
     }
   }
 
@@ -1018,10 +1042,10 @@ class DatabaseService {
    */
   async upsertDailyAssessment(data: DailyAssessment): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
+        await this.db.runAsync(
         `INSERT INTO daily_assessments
          (pig_id, bucket_day, day_start, day_end, overall_status, summary,
           assessment_json, source_hourly_count, source_hash,
@@ -1042,27 +1066,28 @@ class DatabaseService {
            error_code = excluded.error_code,
            error_message = excluded.error_message,
            updated_at = CURRENT_TIMESTAMP`,
-        [
-          data.pig_id,
-          data.bucket_day,
-          data.day_start,
-          data.day_end,
-          data.overall_status,
-          data.summary,
-          data.assessment_json,
-          data.source_hourly_count,
-          data.source_hash,
-          data.schema_version,
-          data.prompt_version,
-          data.model_version,
-          data.status,
-          data.error_code ?? null,
-          data.error_message ?? null,
-        ]
-      );
+          [
+            data.pig_id,
+            data.bucket_day,
+            data.day_start,
+            data.day_end,
+            data.overall_status,
+            data.summary,
+            data.assessment_json,
+            data.source_hourly_count,
+            data.source_hash,
+            data.schema_version,
+            data.prompt_version,
+            data.model_version,
+            data.status,
+            data.error_code ?? null,
+            data.error_message ?? null,
+          ]
+        );
+      });
     } catch (error) {
       console.error('❌ Error upserting daily assessment:', error);
-      this.dataQueue.push(() => this.upsertDailyAssessment(data));
+      throw error;
     }
   }
 
@@ -1173,15 +1198,15 @@ class DatabaseService {
    */
   async saveDevice(deviceId: string, deviceMac: string, deviceName: string): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
-        `INSERT OR REPLACE INTO devices (device_id, device_mac, device_name, pairing_date, last_connected)
-         VALUES (?, ?, ?, ?, ?)`,
-        [deviceId, deviceMac, deviceName, Date.now(), Date.now()]
-      );
-      console.log('✅ Device saved:', deviceId);
+        await this.db.runAsync(
+          `INSERT OR REPLACE INTO devices (device_id, device_mac, device_name, pairing_date, last_connected)
+           VALUES (?, ?, ?, ?, ?)`,
+          [deviceId, deviceMac, deviceName, Date.now(), Date.now()]
+        );
+      });
     } catch (error) {
       console.error('❌ Error saving device:', error);
       throw error;
@@ -1212,14 +1237,14 @@ class DatabaseService {
    */
   async updateDeviceName(deviceId: string, newName: string): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
-        `UPDATE devices SET device_name = ? WHERE device_id = ?`,
-        [newName, deviceId]
-      );
-      console.log('✅ Device name updated:', deviceId, '->', newName);
+        await this.db.runAsync(
+          `UPDATE devices SET device_name = ? WHERE device_id = ?`,
+          [newName, deviceId]
+        );
+      });
     } catch (error) {
       console.error('❌ Error updating device name:', error);
       throw error;
@@ -1249,14 +1274,14 @@ class DatabaseService {
    */
   async updateDeviceLastConnected(deviceId: string): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
-        `UPDATE devices SET last_connected = ? WHERE device_id = ?`,
-        [Date.now(), deviceId]
-      );
-      console.log('✅ Device last_connected updated:', deviceId);
+        await this.db.runAsync(
+          `UPDATE devices SET last_connected = ? WHERE device_id = ?`,
+          [Date.now(), deviceId]
+        );
+      });
     } catch (error) {
       console.error('❌ Error updating device last_connected:', error);
       throw error;
@@ -1265,27 +1290,28 @@ class DatabaseService {
 
   async upsertFeedingSchedule(data: FeedingSchedule): Promise<void> {
     try {
-      await this._ensureInitialized();
-      if (!this.db) throw new Error('Database connection is null');
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
 
-      await this.db.runAsync(
-        `INSERT INTO feeding_schedules
-         (pig_id, feedings_per_day, feeding_times, feeding_window_before_minutes, feeding_window_after_minutes)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(pig_id) DO UPDATE SET
-           feedings_per_day = excluded.feedings_per_day,
-           feeding_times = excluded.feeding_times,
-           feeding_window_before_minutes = excluded.feeding_window_before_minutes,
-           feeding_window_after_minutes = excluded.feeding_window_after_minutes,
-           updated_at = CURRENT_TIMESTAMP`,
-        [
-          data.pig_id,
-          data.feedings_per_day,
-          data.feeding_times,
-          data.feeding_window_before_minutes,
-          data.feeding_window_after_minutes,
-        ]
-      );
+        await this.db.runAsync(
+          `INSERT INTO feeding_schedules
+           (pig_id, feedings_per_day, feeding_times, feeding_window_before_minutes, feeding_window_after_minutes)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(pig_id) DO UPDATE SET
+             feedings_per_day = excluded.feedings_per_day,
+             feeding_times = excluded.feeding_times,
+             feeding_window_before_minutes = excluded.feeding_window_before_minutes,
+             feeding_window_after_minutes = excluded.feeding_window_after_minutes,
+             updated_at = CURRENT_TIMESTAMP`,
+          [
+            data.pig_id,
+            data.feedings_per_day,
+            data.feeding_times,
+            data.feeding_window_before_minutes,
+            data.feeding_window_after_minutes,
+          ]
+        );
+      });
     } catch (error) {
       console.error('❌ Error upserting feeding schedule:', error);
       throw error;

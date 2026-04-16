@@ -6,6 +6,17 @@ import { DEFAULT_FEEDING_SCHEDULE, isWithinFeedingWindow } from '../services/dia
 import { dbService } from '../services/storage/db/client';
 import type { FeedingSchedule } from '../services/core/types';
 
+const PIG_ID = 'LIVE-PIG-01';
+const FEEDING_TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+const normalizeFeedingTimes = (feedingTimes: string[]): string[] => {
+  const next = [...feedingTimes.slice(0, 2)];
+  while (next.length < 2) {
+    next.push('');
+  }
+  return next;
+};
+
 // --- STATUS CARD COMPONENT ---
 interface StatusCardProps {
   label: string;
@@ -28,7 +39,9 @@ interface LivestockItemProps {
   feedingPostureDetected: boolean;
   pitchAngle: number;
   withinFeedingWindow: boolean;
+  feedingTimes: string[];
   status: string;
+  onSaveFeedingTimes: (times: string[]) => Promise<void>;
   onNavigateToAnalyze?: () => void;
 }
 
@@ -38,14 +51,28 @@ const LivestockItem = ({
   feedingPostureDetected,
   pitchAngle,
   withinFeedingWindow,
+  feedingTimes,
   status,
+  onSaveFeedingTimes,
   onNavigateToAnalyze,
 }: LivestockItemProps) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [weight, setWeight] = useState('');
   const [isEditingWeight, setIsEditingWeight] = useState(false);
+  const [feedingTimeInputs, setFeedingTimeInputs] = useState<string[]>(() => normalizeFeedingTimes(feedingTimes));
+  const [feedingScheduleError, setFeedingScheduleError] = useState<string | null>(null);
+  const [feedingScheduleSuccess, setFeedingScheduleSuccess] = useState<string | null>(null);
+  const [isSavingFeedingSchedule, setIsSavingFeedingSchedule] = useState(false);
 
   const isEatingNow = pitchAngle < 45 && feedingPostureDetected;
+
+  useEffect(() => {
+    if (modalVisible) {
+      setFeedingTimeInputs(normalizeFeedingTimes(feedingTimes));
+      setFeedingScheduleError(null);
+      setFeedingScheduleSuccess(null);
+    }
+  }, [feedingTimes, modalVisible]);
 
   // Keep the main label schedule-based and only surface live eating during that window.
   const getFeedingStatus = () => {
@@ -92,6 +119,41 @@ const LivestockItem = ({
   const { color: statusColor, bgColor: statusBgColor } = getStatusStyles();
   const { color: tempColor, bgColor: tempBgColor } = getTempStyles();
   const feedingStatus = getFeedingStatus();
+  const currentFeedingTimes = normalizeFeedingTimes(feedingTimes);
+
+  const handleFeedingTimeChange = (index: number, value: string) => {
+    setFeedingTimeInputs((current) => {
+      const next = normalizeFeedingTimes(current);
+      next[index] = value;
+      return next;
+    });
+    setFeedingScheduleError(null);
+    setFeedingScheduleSuccess(null);
+  };
+
+  const handleSaveFeedingTimes = async () => {
+    const normalized = feedingTimeInputs.map((time) => time.trim());
+    const hasInvalidTime = normalized.some((time) => !FEEDING_TIME_REGEX.test(time));
+
+    if (hasInvalidTime) {
+      setFeedingScheduleError('Enter both feeding times in HH:MM format.');
+      setFeedingScheduleSuccess(null);
+      return;
+    }
+
+    try {
+      setIsSavingFeedingSchedule(true);
+      await onSaveFeedingTimes(normalized);
+      setFeedingScheduleSuccess('Feeding times saved.');
+      setFeedingScheduleError(null);
+    } catch (error) {
+      console.error('Failed to save feeding times:', error);
+      setFeedingScheduleError('Unable to save feeding times right now.');
+      setFeedingScheduleSuccess(null);
+    } finally {
+      setIsSavingFeedingSchedule(false);
+    }
+  };
 
   return (
     <>
@@ -162,6 +224,66 @@ const LivestockItem = ({
             <View className="flex-row justify-between items-center mb-6">
               <Text className="text-base text-gray-600">Pig ID:</Text>
               <Text className="text-xl font-bold" style={{ color: '#3b82f6' }}>{id}</Text>
+            </View>
+
+            <View
+              className="p-4 bg-white rounded-xl mb-6"
+              style={{
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.1,
+                shadowRadius: 4,
+                elevation: 3,
+              }}
+            >
+              <Text className="text-lg font-semibold text-gray-900 mb-3">Feeding Schedule</Text>
+              <Text className="text-sm text-gray-500 mb-3">
+                Current times: {currentFeedingTimes[0] || '--:--'} and {currentFeedingTimes[1] || '--:--'}
+              </Text>
+
+              <View className="mb-3">
+                <Text className="text-sm text-gray-500 mb-2">Feeding Time 1</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-xl px-4 py-3 text-base text-gray-900"
+                  value={feedingTimeInputs[0]}
+                  onChangeText={(value) => handleFeedingTimeChange(0, value)}
+                  placeholder="06:00"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  maxLength={5}
+                />
+              </View>
+
+              <View className="mb-3">
+                <Text className="text-sm text-gray-500 mb-2">Feeding Time 2</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-xl px-4 py-3 text-base text-gray-900"
+                  value={feedingTimeInputs[1]}
+                  onChangeText={(value) => handleFeedingTimeChange(1, value)}
+                  placeholder="16:00"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  maxLength={5}
+                />
+              </View>
+
+              {feedingScheduleError ? (
+                <Text className="text-sm mb-3" style={{ color: '#dc2626' }}>{feedingScheduleError}</Text>
+              ) : null}
+              {feedingScheduleSuccess ? (
+                <Text className="text-sm mb-3" style={{ color: '#16a34a' }}>{feedingScheduleSuccess}</Text>
+              ) : null}
+
+              <TouchableOpacity
+                className="rounded-xl py-3 items-center"
+                style={{ backgroundColor: isSavingFeedingSchedule ? '#93c5fd' : '#2563eb' }}
+                onPress={handleSaveFeedingTimes}
+                disabled={isSavingFeedingSchedule}
+              >
+                <Text className="text-white font-semibold">
+                  {isSavingFeedingSchedule ? 'Saving...' : 'Save Feeding Times'}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             {/* Weight and Health Score Row */}
@@ -269,14 +391,17 @@ export default function DashboardScreen({ navigation }: any) {
   useEffect(() => {
     const loadFeedingSchedule = async () => {
       try {
-        const stored = await dbService.getFeedingSchedule('LIVE-PIG-01');
+        const stored = await dbService.getFeedingSchedule(PIG_ID);
         if (!stored) {
-          setFeedingSchedule(DEFAULT_FEEDING_SCHEDULE);
+          setFeedingSchedule({
+            ...DEFAULT_FEEDING_SCHEDULE,
+            pigId: PIG_ID,
+          });
           return;
         }
 
         setFeedingSchedule({
-          pigId: 'LIVE-PIG-01',
+          pigId: PIG_ID,
           feedingsPerDay: Number(stored.feedings_per_day ?? DEFAULT_FEEDING_SCHEDULE.feedingsPerDay),
           feedingTimes: JSON.parse(String(stored.feeding_times ?? '[]')),
           feedingWindowBeforeMinutes: Number(
@@ -296,6 +421,26 @@ export default function DashboardScreen({ navigation }: any) {
       console.error('Failed to initialize feeding schedule:', error);
     });
   }, []);
+
+  const handleSaveFeedingTimes = async (feedingTimes: string[]) => {
+    const nextSchedule: FeedingSchedule = {
+      pigId: PIG_ID,
+      feedingsPerDay: 2,
+      feedingTimes,
+      feedingWindowBeforeMinutes: feedingSchedule.feedingWindowBeforeMinutes,
+      feedingWindowAfterMinutes: feedingSchedule.feedingWindowAfterMinutes,
+    };
+
+    await dbService.upsertFeedingSchedule({
+      pig_id: PIG_ID,
+      feedings_per_day: 2,
+      feeding_times: JSON.stringify(feedingTimes),
+      feeding_window_before_minutes: nextSchedule.feedingWindowBeforeMinutes,
+      feeding_window_after_minutes: nextSchedule.feedingWindowAfterMinutes,
+    });
+
+    setFeedingSchedule(nextSchedule);
+  };
 
   // BLE scanning is now handled from Profile screen only
   // No auto-scanning on Dashboard mount
@@ -358,12 +503,14 @@ export default function DashboardScreen({ navigation }: any) {
         <View className="bg-white rounded-lg shadow-sm">
           {receivedData ? (
             <LivestockItem 
-              id="LIVE-PIG-01"
+              id={PIG_ID}
               temp={receivedData.temp}
               feedingPostureDetected={receivedData.feedingPostureDetected}
               pitchAngle={receivedData.pitchAngle}
               withinFeedingWindow={withinFeedingWindow}
+              feedingTimes={feedingSchedule.feedingTimes}
               status={currentStatus}
+              onSaveFeedingTimes={handleSaveFeedingTimes}
               onNavigateToAnalyze={() => navigation.navigate('Analyze')}
             />
           ) : (

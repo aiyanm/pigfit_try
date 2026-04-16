@@ -28,6 +28,9 @@ const char *BLE_CHARACTERISTIC_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
 #define MAGIC_NUMBER 0xAA
 #define PACKET_VERSION 0x02
 #define DS18B20_CONVERSION_MS 750
+#define SENSOR_REFRESH_INTERVAL_MS 100
+#define BLE_NOTIFY_INTERVAL_MS 150
+#define COOPERATIVE_LOOP_DELAY_MS 5
 #define FEEDING_PITCH_THRESHOLD_DEG 45.0f
 #define LOW_MOTION_THRESHOLD 0.12f
 #define FEEDING_DETECT_CONSECUTIVE 2
@@ -52,6 +55,10 @@ bool feedingPostureDetected = false;
 bool hs300xReady = false;
 bool imuReady = false;
 uint8_t feedingGoodSamples = 0;
+bool ds18b20ConversionInFlight = false;
+unsigned long lastSensorRefreshAt = 0;
+unsigned long lastNotifyAt = 0;
+unsigned long lastDs18b20ConversionAt = 0;
 
 // Binary packet buffer
 uint8_t packet[PACKET_SIZE];
@@ -98,7 +105,9 @@ void initializeSensors()
   if (bus.Discover().FindNextDevice(device) && device.GetModelCode() == MaximWire::DS18B20::MODEL_CODE)
   {
     Serial.println("✓ DS18B20 OK");
-    device.Update(bus); // Initial blocking conversion on startup only
+    device.Update(bus);
+    ds18b20ConversionInFlight = true;
+    lastDs18b20ConversionAt = millis();
   }
   else
   {
@@ -143,29 +152,36 @@ void loop()
 
     while (central.connected())
     {
-      readSensors();
-      packageDataToBinary();
+      unsigned long now = millis();
 
-      Serial.print("Sending ");
-      Serial.print(PACKET_SIZE);
-      Serial.println(" bytes...");
+      updateDs18b20State(now);
 
-      if (dataCharacteristic.writeValue(packet, PACKET_SIZE))
+      if (now - lastSensorRefreshAt >= SENSOR_REFRESH_INTERVAL_MS)
       {
-        Serial.println("✓ Binary packet sent");
-      }
-      else
-      {
-        Serial.println("ERROR: BLE packet send failed");
+        lastSensorRefreshAt = now;
+        readSensors();
       }
 
-      // Start next DS18B20 conversion NOW so it completes during the delay (~750ms)
-      if (device.IsValid())
+      if (now - lastNotifyAt >= BLE_NOTIFY_INTERVAL_MS)
       {
-        device.Update(bus);
+        lastNotifyAt = now;
+        packageDataToBinary();
+
+        Serial.print("Sending ");
+        Serial.print(PACKET_SIZE);
+        Serial.println(" bytes...");
+
+        if (dataCharacteristic.writeValue(packet, PACKET_SIZE))
+        {
+          Serial.println("✓ Binary packet sent");
+        }
+        else
+        {
+          Serial.println("ERROR: BLE packet send failed");
+        }
       }
 
-      delay(DS18B20_CONVERSION_MS);
+      delay(COOPERATIVE_LOOP_DELAY_MS);
     }
 
     Serial.println("Disconnected");
@@ -175,7 +191,7 @@ void loop()
     Serial.println("✓ BLE Advertising (waiting for connection)");
   }
 
-  delay(200);
+  delay(COOPERATIVE_LOOP_DELAY_MS);
 }
 
 // ----------------------------------------------------
@@ -196,26 +212,7 @@ void readSensors()
     hs300x_temp = 0.0f;
   }
 
-  // Read DS18B20 - reads result of PREVIOUS conversion (non-blocking)
-  if (device.IsValid())
-  {
-    float temp = device.GetTemperature<float>(bus);
-    if (!isnan(temp))
-    {
-      ds18b20_temp = temp;
-    }
-    else
-    {
-      ds18b20_temp = 0.0f;
-    }
-  }
-  else
-  {
-    if (bus.Discover().FindNextDevice(device) && device.GetModelCode() == MaximWire::DS18B20::MODEL_CODE)
-    {
-      device.Update(bus); // blocking only on reconnect
-    }
-  }
+  // DS18B20 is updated by updateDs18b20State() on its own timer.
 
   // Read IMU
   if (imuReady && IMU.accelerationAvailable())
@@ -271,6 +268,42 @@ void readSensors()
   else
   {
     imu_gyro_x = imu_gyro_y = imu_gyro_z = 0.0f;
+  }
+}
+
+void updateDs18b20State(unsigned long now)
+{
+  if (!device.IsValid())
+  {
+    if (bus.Discover().FindNextDevice(device) && device.GetModelCode() == MaximWire::DS18B20::MODEL_CODE)
+    {
+      Serial.println("✓ DS18B20 reconnected");
+      device.Update(bus);
+      ds18b20ConversionInFlight = true;
+      lastDs18b20ConversionAt = now;
+    }
+    return;
+  }
+
+  if (ds18b20ConversionInFlight && now - lastDs18b20ConversionAt >= DS18B20_CONVERSION_MS)
+  {
+    float temp = device.GetTemperature<float>(bus);
+    if (!isnan(temp))
+    {
+      ds18b20_temp = temp;
+    }
+    else
+    {
+      Serial.println("⚠️ DS18B20 returned NaN");
+    }
+    ds18b20ConversionInFlight = false;
+  }
+
+  if (!ds18b20ConversionInFlight)
+  {
+    device.Update(bus);
+    ds18b20ConversionInFlight = true;
+    lastDs18b20ConversionAt = now;
   }
 }
 

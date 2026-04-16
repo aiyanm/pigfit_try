@@ -10,6 +10,7 @@ export const ACTIVITY_THRESHOLDS = {
 } as const;
 
 export const FEEDING_WINDOW_MINUTES = 5;
+const FEEDING_TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export const DEFAULT_FEEDING_SCHEDULE: FeedingSchedule = {
   pigId: 'default',
@@ -40,6 +41,49 @@ const parseScheduleTime = (value: string): number => {
   const [hours, minutes] = value.split(':').map((part) => Number(part));
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return -1;
   return hours * 60 + minutes;
+};
+
+const parseStoredFeedingTimes = (value: unknown, fallbackTimes: string[]): string[] => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return fallbackTimes;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return fallbackTimes;
+    }
+
+    const normalized = parsed
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter((item) => FEEDING_TIME_REGEX.test(item))
+      .slice(0, 2);
+
+    return normalized.length === 2 ? normalized : fallbackTimes;
+  } catch {
+    return fallbackTimes;
+  }
+};
+
+export const parseStoredFeedingSchedule = (
+  stored: any,
+  pigId: string,
+  fallback: FeedingSchedule = DEFAULT_FEEDING_SCHEDULE
+): FeedingSchedule => {
+  const fallbackTimes = fallback.feedingTimes.slice(0, 2);
+
+  return {
+    pigId,
+    feedingsPerDay: Number(stored?.feedings_per_day ?? fallback.feedingsPerDay) || fallback.feedingsPerDay,
+    feedingTimes: parseStoredFeedingTimes(stored?.feeding_times, fallbackTimes),
+    feedingWindowBeforeMinutes:
+      Number(stored?.feeding_window_before_minutes ?? fallback.feedingWindowBeforeMinutes) ||
+      fallback.feedingWindowBeforeMinutes,
+    feedingWindowAfterMinutes:
+      Number(stored?.feeding_window_after_minutes ?? fallback.feedingWindowAfterMinutes) ||
+      fallback.feedingWindowAfterMinutes,
+  };
 };
 
 export const isWithinFeedingWindow = (

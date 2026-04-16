@@ -518,9 +518,11 @@ function useBLE(): BluetoothLowEnergyApi {
       console.log("✅ Binary data parsed:", parsedData);
       setReceivedData(parsedData);
 
-      logSensorData({
+      void logSensorData({
         timestamp: Date.now(),
         ...parsedData,
+      }).catch((error) => {
+        console.error("❌ Async sensor logging failed:", error);
       });
     } catch (e) {
       console.log("❌ Error parsing binary data:", e);

@@ -24,9 +24,12 @@ let currentPigId = 'LIVE-PIG-01';
 const lastSeenHourByPig = new Map<string, number>();
 const lastPeriodRefreshAtByPig = new Map<string, number>();
 const periodRefreshInFlightByPig = new Set<string>();
+const feedingScheduleCacheByPig = new Map<string, { schedule: FeedingSchedule; loadedAt: number }>();
+const closedHourProcessingInFlight = new Set<string>();
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PERIOD_AGG_REFRESH_THROTTLE_MS = 20 * 1000;
+const FEEDING_SCHEDULE_CACHE_TTL_MS = 30 * 1000;
 type PeriodRefreshSource = 'ingest' | 'timer';
 
 const PERIOD_DURATION_MS: Record<TrendPeriod, number> = {
@@ -58,9 +61,16 @@ const getHourStartMs = (ts: number): number => {
 };
 
 const getFeedingScheduleForPig = async (pigId: string): Promise<FeedingSchedule> => {
+  const cached = feedingScheduleCacheByPig.get(pigId);
+  if (cached && Date.now() - cached.loadedAt < FEEDING_SCHEDULE_CACHE_TTL_MS) {
+    return cached.schedule;
+  }
+
   const stored = await dbService.getFeedingSchedule(pigId);
   if (stored) {
-    return parseStoredFeedingSchedule(stored, pigId, DEFAULT_FEEDING_SCHEDULE);
+    const schedule = parseStoredFeedingSchedule(stored, pigId, DEFAULT_FEEDING_SCHEDULE);
+    feedingScheduleCacheByPig.set(pigId, { schedule, loadedAt: Date.now() });
+    return schedule;
   }
 
   await dbService.upsertFeedingSchedule({
@@ -71,10 +81,12 @@ const getFeedingScheduleForPig = async (pigId: string): Promise<FeedingSchedule>
     feeding_window_after_minutes: DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes,
   });
 
-  return {
+  const schedule = {
     ...DEFAULT_FEEDING_SCHEDULE,
     pigId,
   };
+  feedingScheduleCacheByPig.set(pigId, { schedule, loadedAt: Date.now() });
+  return schedule;
 };
 
 const toStoredSensorRow = async (data: SensorDataPoint, deviceId: string, pigId: string) => {
@@ -239,6 +251,20 @@ export const processClosedHourBucket = async (pigId: string, bucketStartMs: numb
   await maybeRunDailyAssessmentForDay(pigId, toLocalDateString(bucketStartMs));
 };
 
+const queueClosedHourProcessing = (pigId: string, bucketStartMs: number): void => {
+  const key = `${pigId}:${bucketStartMs}`;
+  if (closedHourProcessingInFlight.has(key)) return;
+
+  closedHourProcessingInFlight.add(key);
+  void processClosedHourBucket(pigId, bucketStartMs)
+    .catch((error) => {
+      console.error(`❌ Error processing closed hour bucket for ${pigId} @ ${bucketStartMs}:`, error);
+    })
+    .finally(() => {
+      closedHourProcessingInFlight.delete(key);
+    });
+};
+
 export const initializeLogger = async (): Promise<void> => {
   try {
     await dbService.initialize();
@@ -263,10 +289,10 @@ export const logSensorData = async (
     const lastSeenHourStart = lastSeenHourByPig.get(pigId);
 
     if (lastSeenHourStart === undefined) {
-      await processClosedHourBucket(pigId, previousHourStart);
+      queueClosedHourProcessing(pigId, previousHourStart);
       lastSeenHourByPig.set(pigId, currentHourStart);
     } else if (currentHourStart > lastSeenHourStart) {
-      await processClosedHourBucket(pigId, lastSeenHourStart);
+      queueClosedHourProcessing(pigId, lastSeenHourStart);
       lastSeenHourByPig.set(pigId, currentHourStart);
     } else if (currentHourStart < lastSeenHourStart) {
       lastSeenHourByPig.set(pigId, currentHourStart);
