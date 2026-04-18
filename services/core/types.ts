@@ -39,6 +39,14 @@ export interface FeedingSchedule {
   feedingWindowAfterMinutes: number;
 }
 
+export interface FeedingConfirmationSession {
+  pigId: string;
+  startedAt: number;
+  expiresAt: number;
+  isActive: boolean;
+  isCanceled: boolean;
+}
+
 export interface HourlyAnalyticsSummary {
   date: string;
   hour: number;

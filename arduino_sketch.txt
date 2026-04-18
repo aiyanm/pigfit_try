@@ -254,20 +254,17 @@ void readSensors()
   }
   else
   {
-    imu_accel_x = imu_accel_y = imu_accel_z = 0.0f;
-    activityIntensity = 0.0f;
-    pitchAngle = 0.0f;
-    feedingGoodSamples = 0;
-    feedingPostureDetected = false;
+    activityIntensity = sqrt(imu_accel_x * imu_accel_x +
+                             imu_accel_y * imu_accel_y +
+                             imu_accel_z * imu_accel_z);
+
+    float xy_magnitude = sqrt(imu_accel_x * imu_accel_x + imu_accel_y * imu_accel_y);
+    pitchAngle = atan2(imu_accel_z, xy_magnitude) * 180.0 / PI;
   }
 
-  if (IMU.gyroscopeAvailable())
+  if (imuReady && IMU.gyroscopeAvailable())
   {
     IMU.readGyroscope(imu_gyro_x, imu_gyro_y, imu_gyro_z);
-  }
-  else
-  {
-    imu_gyro_x = imu_gyro_y = imu_gyro_z = 0.0f;
   }
 }
 

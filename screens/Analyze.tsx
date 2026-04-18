@@ -39,6 +39,7 @@ type TrendPeriod = '30m' | '1h' | '4h' | '12h';
 type BackfillRangePreset = '7d' | '30d' | 'all';
 const MIN_HOURLY_INSIGHTS_FOR_DAILY = 8;
 const CHART_HEIGHT = 100;
+const SUPPORTED_PIG_ID: PigId = 'LIVE-PIG-01';
 
 const INSIGHT_STATUS_UI: Record<string, { badgeBg: string; badgeText: string; label: string }> = {
   normal: { badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
@@ -134,7 +135,6 @@ const getBackfillDateRange = (preset: BackfillRangePreset): { startDate: string;
 };
 
 const Analyze = () => {
-  const [selectedPig, setSelectedPig] = useState<PigId>('LIVE-PIG-01');
   const [selectedPeriod, setSelectedPeriod] = useState<TrendPeriod>('12h');
   const [sensorData, setSensorData] = useState<SensorDataPoint[]>([]);
   const [trendData, setTrendData] = useState<SensorDataPoint[]>([]);
@@ -243,13 +243,13 @@ const Analyze = () => {
         
         const hours = periodHoursMap[selectedPeriod];
         const [rawData, aggregatedTrendData] = await Promise.all([
-          loadSensorData(hours, selectedPig),
-          loadTrendData(selectedPeriod, selectedPig),
+          loadSensorData(hours, SUPPORTED_PIG_ID),
+          loadTrendData(selectedPeriod, SUPPORTED_PIG_ID),
         ]);
         setSensorData(rawData);
         setTrendData(aggregatedTrendData);
-        setHourlyAnalytics(await getCurrentHourlyAnalytics(selectedPig));
-        console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${selectedPig} (${selectedPeriod})`);
+        setHourlyAnalytics(await getCurrentHourlyAnalytics(SUPPORTED_PIG_ID));
+        console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${SUPPORTED_PIG_ID} (${selectedPeriod})`);
       } catch (error) {
         console.error('Error loading sensor data:', error);
       } finally {
@@ -258,15 +258,15 @@ const Analyze = () => {
     };
     
     loadData();
-  }, [selectedPeriod, selectedPig]);
+  }, [selectedPeriod]);
 
   // Load deterministic outputs for current pig/day
   useEffect(() => {
     let active = true;
     const loadDeterministic = async () => {
       try {
-        const data = await getDeterministicInsights(selectedPig);
-        const analytics = await getCurrentHourlyAnalytics(selectedPig);
+        const data = await getDeterministicInsights(SUPPORTED_PIG_ID);
+        const analytics = await getCurrentHourlyAnalytics(SUPPORTED_PIG_ID);
         if (active) setDeterministicData(data);
         if (active) setHourlyAnalytics(analytics);
       } catch (error) {
@@ -279,7 +279,7 @@ const Analyze = () => {
       active = false;
       clearInterval(timer);
     };
-  }, [selectedPig]);
+  }, []);
 
   const analyticsAlert = useMemo(() => {
     if (!hourlyAnalytics) {
@@ -313,7 +313,7 @@ const Analyze = () => {
       return {
         status: 'Warning',
         title: 'Stress indicators need monitoring',
-        description: `${fever} fever events, ${heat} heat stress events, and ${Number(hourlyAnalytics.true_eating_event_count ?? 0)} true eating events in the latest hour.`,
+        description: `${fever} fever events, ${heat} heat stress events, and ${Number(hourlyAnalytics.true_eating_event_count ?? 0)} manual feeding confirmations in the latest hour.`,
         color: 'bg-yellow-100',
         text: 'text-yellow-700',
         symbol: '●',
@@ -323,7 +323,7 @@ const Analyze = () => {
     return {
       status: 'Normal',
       title: 'Stable analytics hour',
-      description: `No fever or heat-stress events in the latest hour. Feeding adherence ${(Number(hourlyAnalytics.feeding_schedule_adherence ?? 0) * 100).toFixed(0)}%.`,
+      description: `No fever or heat-stress events in the latest hour. Manual feeding confirmations: ${Number(hourlyAnalytics.true_eating_event_count ?? 0)}.`,
       color: 'bg-green-100',
       text: 'text-green-700',
       symbol: '✓',
@@ -367,8 +367,8 @@ const Analyze = () => {
     setIsGeneratingDaily(true);
     try {
       const targetDay = deterministicData?.bucketDay || toLocalDateString(Date.now());
-      await runDailyAssessmentForDay(selectedPig, targetDay);
-      await refreshDeterministicInsights(selectedPig);
+      await runDailyAssessmentForDay(SUPPORTED_PIG_ID, targetDay);
+      await refreshDeterministicInsights(SUPPORTED_PIG_ID);
       Alert.alert('Daily insight generated', `Daily assessment has been updated for ${targetDay}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -394,12 +394,6 @@ const Analyze = () => {
     value: point.activityIntensity,
     dataPointText: point.activityIntensity.toFixed(2),
   }));
-
-  const pigs: { id: PigId; color: string }[] = [
-    { id: 'LIVE-PIG-01', color: '#4CAF50' },
-    { id: 'LIVE-PIG-02', color: '#FFC107' },
-    { id: 'LIVE-PIG-03', color: '#F44336' },
-  ];
 
   const periods: TrendPeriod[] = ['30m', '1h', '4h', '12h'];
 
@@ -552,7 +546,7 @@ const Analyze = () => {
     try {
       const range = getBackfillDateRange(backfillRangePreset);
       const result = await backfillDeterministicInsightsV2(
-        selectedPig,
+        SUPPORTED_PIG_ID,
         range.startDate,
         range.endDate,
         (progress) => {
@@ -562,10 +556,10 @@ const Analyze = () => {
           );
         }
       );
-      await refreshDeterministicInsights(selectedPig);
+      await refreshDeterministicInsights(SUPPORTED_PIG_ID);
       Alert.alert(
         'Backfill complete',
-        `Recomputed ${result.hourlyBucketsProcessed} hourly buckets and ${result.dailyDaysProcessed} daily assessments for ${selectedPig} (${range.label}).`
+        `Recomputed ${result.hourlyBucketsProcessed} hourly buckets and ${result.dailyDaysProcessed} daily assessments for ${SUPPORTED_PIG_ID} (${range.label}).`
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -600,31 +594,22 @@ const Analyze = () => {
       </View>
 
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-        {/* Pig Selector Chips */}
-        <View className="flex-row px-4 py-3 gap-2">
-          {pigs.map((pig) => (
-            <TouchableOpacity
-              key={pig.id}
-              className={`flex-row items-center px-3 py-1.5 rounded-2xl border ${
-                selectedPig === pig.id
-                  ? 'border-green-500 bg-green-50'
-                  : 'border-gray-300 bg-white'
-              }`}
-              onPress={() => setSelectedPig(pig.id)}
-            >
-              <View
-                className="w-2 h-2 rounded-full mr-1.5"
-                style={{ backgroundColor: pig.color }}
-              />
-              <Text className="text-xs font-medium text-gray-800">{pig.id}</Text>
-            </TouchableOpacity>
-          ))}
+        {/* Additional pigs stay hidden until multi-device binding is implemented. */}
+        <View className="px-4 py-3">
+          <View className="self-start flex-row items-center px-3 py-1.5 rounded-2xl border border-green-500 bg-green-50">
+            <View className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#4CAF50' }} />
+            <Text className="text-xs font-medium text-gray-800">{SUPPORTED_PIG_ID}</Text>
+          </View>
+          <Text className="text-xs text-gray-500 mt-2">
+            Analyze currently supports one live pig. Multi-pig support is planned for a future release.
+          </Text>
         </View>
 
         {/* Selected Pig Info */}
         <View className="flex-row justify-between px-4 py-3 bg-white mx-4 mb-3 rounded-xl">
           <View className="flex-1">
-            <Text className="text-xl font-bold text-gray-800 mb-2">{selectedPig}</Text>
+            <Text className="text-xl font-bold text-gray-800 mb-2">{SUPPORTED_PIG_ID}</Text>
+            <Text className="text-xs text-gray-500 mb-2">Current supported pig in Analyze</Text>
             <View className="flex-row gap-2">
               <View className="px-2.5 py-1 rounded-xl bg-green-500">
                 <Text className="text-[11px] text-green-800 font-medium">Active</Text>
@@ -943,7 +928,7 @@ const Analyze = () => {
               <Text className="text-white font-semibold text-sm">
                 {isBackfillingInsights
                   ? 'Backfilling v2 Insights...'
-                  : `🗂️ Backfill ${selectedPig} to v2`}
+                  : `🗂️ Backfill ${SUPPORTED_PIG_ID} to v2`}
               </Text>
             </TouchableOpacity>
 

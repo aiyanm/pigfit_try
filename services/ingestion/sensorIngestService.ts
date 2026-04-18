@@ -1,8 +1,6 @@
 import {
-  DEFAULT_FEEDING_SCHEDULE,
   calculateTHI,
   classifyActivityState,
-  parseStoredFeedingSchedule,
   tagSensorDataPoint,
 } from '../diagnostics/metricsService';
 import {
@@ -11,8 +9,8 @@ import {
   runHourlyInsightForBucket,
 } from '../ai/deterministic/orchestrator';
 import { dbService } from '../storage/db/client';
+import { wasFeedingConfirmedAt } from '../feeding/feedingConfirmationService';
 import type {
-  FeedingSchedule,
   HourlyAnalyticsSummary,
   SensorDataPoint,
   TrendPeriod,
@@ -24,12 +22,18 @@ let currentPigId = 'LIVE-PIG-01';
 const lastSeenHourByPig = new Map<string, number>();
 const lastPeriodRefreshAtByPig = new Map<string, number>();
 const periodRefreshInFlightByPig = new Set<string>();
-const feedingScheduleCacheByPig = new Map<string, { schedule: FeedingSchedule; loadedAt: number }>();
 const closedHourProcessingInFlight = new Set<string>();
+const lastMotionAxesByPig = new Map<string, {
+  accelX: number;
+  accelY: number;
+  accelZ: number;
+  gyroX: number;
+  gyroY: number;
+  gyroZ: number;
+}>();
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PERIOD_AGG_REFRESH_THROTTLE_MS = 20 * 1000;
-const FEEDING_SCHEDULE_CACHE_TTL_MS = 30 * 1000;
 type PeriodRefreshSource = 'ingest' | 'timer';
 
 const PERIOD_DURATION_MS: Record<TrendPeriod, number> = {
@@ -60,37 +64,32 @@ const getHourStartMs = (ts: number): number => {
   return d.getTime();
 };
 
-const getFeedingScheduleForPig = async (pigId: string): Promise<FeedingSchedule> => {
-  const cached = feedingScheduleCacheByPig.get(pigId);
-  if (cached && Date.now() - cached.loadedAt < FEEDING_SCHEDULE_CACHE_TTL_MS) {
-    return cached.schedule;
-  }
-
-  const stored = await dbService.getFeedingSchedule(pigId);
-  if (stored) {
-    const schedule = parseStoredFeedingSchedule(stored, pigId, DEFAULT_FEEDING_SCHEDULE);
-    feedingScheduleCacheByPig.set(pigId, { schedule, loadedAt: Date.now() });
-    return schedule;
-  }
-
-  await dbService.upsertFeedingSchedule({
-    pig_id: pigId,
-    feedings_per_day: DEFAULT_FEEDING_SCHEDULE.feedingsPerDay,
-    feeding_times: JSON.stringify(DEFAULT_FEEDING_SCHEDULE.feedingTimes),
-    feeding_window_before_minutes: DEFAULT_FEEDING_SCHEDULE.feedingWindowBeforeMinutes,
-    feeding_window_after_minutes: DEFAULT_FEEDING_SCHEDULE.feedingWindowAfterMinutes,
-  });
-
-  const schedule = {
-    ...DEFAULT_FEEDING_SCHEDULE,
-    pigId,
-  };
-  feedingScheduleCacheByPig.set(pigId, { schedule, loadedAt: Date.now() });
-  return schedule;
+const parseAxisReading = (value: unknown): number | undefined => {
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numericValue) ? numericValue : undefined;
 };
 
 const toStoredSensorRow = async (data: SensorDataPoint, deviceId: string, pigId: string) => {
-  const tagged = tagSensorDataPoint(data, await getFeedingScheduleForPig(pigId));
+  const tagged = tagSensorDataPoint(data, wasFeedingConfirmedAt(pigId, data.timestamp));
+  const previousMotionAxes = lastMotionAxesByPig.get(pigId);
+  const accelX = parseAxisReading(tagged.accelX) ?? previousMotionAxes?.accelX;
+  const accelY = parseAxisReading(tagged.accelY) ?? previousMotionAxes?.accelY;
+  const accelZ = parseAxisReading(tagged.accelZ) ?? previousMotionAxes?.accelZ;
+  const gyroX = parseAxisReading(tagged.gyroX) ?? previousMotionAxes?.gyroX;
+  const gyroY = parseAxisReading(tagged.gyroY) ?? previousMotionAxes?.gyroY;
+  const gyroZ = parseAxisReading(tagged.gyroZ) ?? previousMotionAxes?.gyroZ;
+
+  if (
+    accelX !== undefined &&
+    accelY !== undefined &&
+    accelZ !== undefined &&
+    gyroX !== undefined &&
+    gyroY !== undefined &&
+    gyroZ !== undefined
+  ) {
+    lastMotionAxesByPig.set(pigId, { accelX, accelY, accelZ, gyroX, gyroY, gyroZ });
+  }
+
   return {
     timestamp: tagged.timestamp,
     device_id: deviceId,
@@ -99,12 +98,12 @@ const toStoredSensorRow = async (data: SensorDataPoint, deviceId: string, pigId:
     activity_intensity: tagged.activityIntensity,
     activity_state: tagged.activityState,
     pitch_angle: tagged.pitchAngle,
-    accel_x: tagged.accelX ?? null,
-    accel_y: tagged.accelY ?? null,
-    accel_z: tagged.accelZ ?? null,
-    gyro_x: tagged.gyroX ?? null,
-    gyro_y: tagged.gyroY ?? null,
-    gyro_z: tagged.gyroZ ?? null,
+    accel_x: accelX ?? null,
+    accel_y: accelY ?? null,
+    accel_z: accelZ ?? null,
+    gyro_x: gyroX ?? null,
+    gyro_y: gyroY ?? null,
+    gyro_z: gyroZ ?? null,
     feeding_posture_detected: tagged.feedingPostureDetected ? 1 : 0,
     env_temp: tagged.envTemp,
     humidity: tagged.humidity,
@@ -314,12 +313,12 @@ export const loadSensorData = async (periodHours: number, pigId?: string): Promi
       humidity: Number(record.humidity),
       activityIntensity: Number(record.activity_intensity),
       pitchAngle: Number(record.pitch_angle),
-      accelX: record.accel_x == null ? undefined : Number(record.accel_x),
-      accelY: record.accel_y == null ? undefined : Number(record.accel_y),
-      accelZ: record.accel_z == null ? undefined : Number(record.accel_z),
-      gyroX: record.gyro_x == null ? undefined : Number(record.gyro_x),
-      gyroY: record.gyro_y == null ? undefined : Number(record.gyro_y),
-      gyroZ: record.gyro_z == null ? undefined : Number(record.gyro_z),
+      accelX: parseAxisReading(record.accel_x),
+      accelY: parseAxisReading(record.accel_y),
+      accelZ: parseAxisReading(record.accel_z),
+      gyroX: parseAxisReading(record.gyro_x),
+      gyroY: parseAxisReading(record.gyro_y),
+      gyroZ: parseAxisReading(record.gyro_z),
       feedingPostureDetected: Number(record.feeding_posture_detected ?? 0) === 1,
       thi: record.thi == null ? undefined : Number(record.thi),
       feverFlag: Number(record.fever_flag ?? 0) === 1,
@@ -525,8 +524,6 @@ export const refreshTodayFeedingAnalyticsForPig = async (
   const rawRows = await dbService.getSensorData(dayStartMs, dayEndMs, pigId);
   if (rawRows.length === 0) return;
 
-  const schedule = await getFeedingScheduleForPig(pigId);
-
   for (const record of rawRows) {
     const tagged = tagSensorDataPoint(
       {
@@ -536,15 +533,15 @@ export const refreshTodayFeedingAnalyticsForPig = async (
         humidity: Number(record.humidity),
         activityIntensity: Number(record.activity_intensity),
         pitchAngle: Number(record.pitch_angle),
-        accelX: record.accel_x == null ? undefined : Number(record.accel_x),
-        accelY: record.accel_y == null ? undefined : Number(record.accel_y),
-        accelZ: record.accel_z == null ? undefined : Number(record.accel_z),
-        gyroX: record.gyro_x == null ? undefined : Number(record.gyro_x),
-        gyroY: record.gyro_y == null ? undefined : Number(record.gyro_y),
-        gyroZ: record.gyro_z == null ? undefined : Number(record.gyro_z),
+        accelX: parseAxisReading(record.accel_x),
+        accelY: parseAxisReading(record.accel_y),
+        accelZ: parseAxisReading(record.accel_z),
+        gyroX: parseAxisReading(record.gyro_x),
+        gyroY: parseAxisReading(record.gyro_y),
+        gyroZ: parseAxisReading(record.gyro_z),
         feedingPostureDetected: Number(record.feeding_posture_detected ?? 0) === 1,
       },
-      schedule
+      wasFeedingConfirmedAt(pigId, Number(record.timestamp))
     );
 
     await dbService.updateSensorDataFeedingFields(

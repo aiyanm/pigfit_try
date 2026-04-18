@@ -550,6 +550,16 @@ class DatabaseService {
         );
       `);
 
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN feeding_posture_detected INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN thi REAL`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN fever_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN lethargy_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN heat_stress_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN severe_heat_flag INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN within_feeding_window INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN true_eating_event INTEGER DEFAULT 0`); } catch {}
+      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN raw_risk_label TEXT DEFAULT 'normal'`); } catch {}
+
       // Run legacy migration path before indexes and post-migration validation.
       await this.migrateLegacySensorDataSchemaIfNeeded();
       await this.validateSensorDataSchema();
@@ -584,15 +594,6 @@ class DatabaseService {
         console.log('✅ Added sample_count column to hourly_aggregates');
       } catch { /* column already exists */ }
 
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN feeding_posture_detected INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN thi REAL`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN fever_flag INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN lethargy_flag INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN heat_stress_flag INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN severe_heat_flag INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN within_feeding_window INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN true_eating_event INTEGER DEFAULT 0`); } catch {}
-      try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN raw_risk_label TEXT DEFAULT 'normal'`); } catch {}
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_x REAL`); } catch {}
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_y REAL`); } catch {}
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_z REAL`); } catch {}

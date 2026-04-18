@@ -119,7 +119,7 @@ const buildHourlyEvidence = (aggregate: HourlyAggregateLike, rule: HourlyRuleCon
     evidence.push(`heat_stress_event_count=${aggregate.heat_stress_event_count}`);
   }
   if (typeof aggregate.true_eating_event_count === 'number') {
-    evidence.push(`true_eating_event_count=${aggregate.true_eating_event_count}`);
+    evidence.push(`manual_feeding_confirmations=${aggregate.true_eating_event_count}`);
   }
   evidence.push(`analytics_label=${rule.label} (${rule.description})`);
   return evidence.slice(0, 5);
@@ -429,6 +429,7 @@ export const buildHourlyPrompt = (
       distress_ratio: aggregate.distress_ratio ?? 0,
       feeding_schedule_adherence: aggregate.feeding_schedule_adherence ?? 0,
       high_risk_hour_flag: aggregate.high_risk_hour_flag ?? 0,
+      feeding_note: 'true_eating_event_count reflects operator-confirmed feeding windows, not automatic schedule-based detection.',
     },
     rules: [
       'Base your judgment on analytics counts, ratios, THI, and temperature peaks.',
