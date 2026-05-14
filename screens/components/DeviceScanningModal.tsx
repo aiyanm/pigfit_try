@@ -29,7 +29,8 @@ const DeviceScanningModal = ({
 }: DeviceScanningModalProps) => {
   const [acknowledgedSuccess, setAcknowledgedSuccess] = useState(false);
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
-  const isBusy = scanStatus === 'scanning' || connectionStatus === 'connecting';
+  const isReconnecting = connectionStatus === 'reconnecting';
+  const isBusy = scanStatus === 'scanning' || connectionStatus === 'connecting' || isReconnecting;
   const isConnected = connectionStatus === 'connected';
   const isTimeout = scanStatus === 'timeout';
   const isError = scanStatus === 'error' || connectionStatus === 'error';
@@ -95,10 +96,16 @@ const DeviceScanningModal = ({
               </Animated.View>
 
               <Text className="text-xl font-semibold text-gray-900 mb-2">
-                {connectionStatus === 'connecting' ? 'Connecting to Device' : 'Searching for Device'}
+                {isReconnecting
+                  ? 'Reconnecting to Device'
+                  : connectionStatus === 'connecting'
+                    ? 'Connecting to Device'
+                    : 'Searching for Device'}
               </Text>
               <Text className="text-gray-600 text-center mb-6 text-sm">
-                {connectionStatus === 'connecting'
+                {isReconnecting
+                  ? 'Trying to restore your PigFit device connection...'
+                  : connectionStatus === 'connecting'
                   ? 'Setting up your PigFit device connection...'
                   : 'Looking for PigFit_Device...'}
               </Text>

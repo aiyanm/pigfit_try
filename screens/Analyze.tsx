@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
   Dimensions,
-  Modal,
   ActivityIndicator,
   Alert,
 } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import {
+  calculateTHI,
   FEVER_THRESHOLD_C,
   HEAT_STRESS_THRESHOLD,
   SEVERE_HEAT_THRESHOLD,
@@ -31,6 +32,7 @@ import {
   toHourlyInsightDisplayData,
 } from '../services';
 import { runDeterministicSchemaTests } from '../services/dev/tests/testDeterministicSchema';
+import { useBLEContext } from '../providers/BLEProvider';
 
 const { width } = Dimensions.get('window');
 
@@ -40,12 +42,47 @@ type BackfillRangePreset = '7d' | '30d' | 'all';
 const MIN_HOURLY_INSIGHTS_FOR_DAILY = 8;
 const CHART_HEIGHT = 100;
 const SUPPORTED_PIG_ID: PigId = 'LIVE-PIG-01';
+const LIVE_PACKET_REPLACE_WINDOW_MS = 25;
+const LIVE_TREND_UI_THROTTLE_MS = 250;
+const PERIOD_DURATION_MS: Record<TrendPeriod, number> = {
+  '30m': 30 * 60 * 1000,
+  '1h': 1 * 60 * 60 * 1000,
+  '4h': 4 * 60 * 60 * 1000,
+  '12h': 12 * 60 * 60 * 1000,
+};
 
-const INSIGHT_STATUS_UI: Record<string, { badgeBg: string; badgeText: string; label: string }> = {
-  normal: { badgeBg: 'bg-green-100', badgeText: 'text-green-700', label: 'Normal' },
-  warning: { badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Warning' },
-  watch: { badgeBg: 'bg-yellow-100', badgeText: 'text-yellow-700', label: 'Watch' },
-  critical: { badgeBg: 'bg-red-100', badgeText: 'text-red-700', label: 'Critical' },
+const INSIGHT_STATUS_UI: Record<
+  string,
+  { badgeBg: string; badgeText: string; label: string; dotColor: string; borderColor: string }
+> = {
+  normal: {
+    badgeBg: 'bg-green-100',
+    badgeText: 'text-green-700',
+    label: 'Normal',
+    dotColor: '#16A34A',
+    borderColor: '#BBF7D0',
+  },
+  warning: {
+    badgeBg: 'bg-yellow-100',
+    badgeText: 'text-yellow-700',
+    label: 'Warning',
+    dotColor: '#D97706',
+    borderColor: '#FDE68A',
+  },
+  watch: {
+    badgeBg: 'bg-yellow-100',
+    badgeText: 'text-yellow-700',
+    label: 'Watch',
+    dotColor: '#D97706',
+    borderColor: '#FDE68A',
+  },
+  critical: {
+    badgeBg: 'bg-red-100',
+    badgeText: 'text-red-700',
+    label: 'Critical',
+    dotColor: '#DC2626',
+    borderColor: '#FECACA',
+  },
 };
 
 const formatInsightHourLabel = (hour: number): string => {
@@ -64,7 +101,7 @@ const parseJsonSafely = (value: unknown): any | null => {
   }
 };
 
-const fallbackProbableIssue = (summary?: string | null): string => {
+const fallbackObservedPattern = (summary?: string | null): string => {
   const text = summary?.trim();
   if (!text) return 'Assessment pending';
   if (/critical/i.test(text)) return 'Critical stress pattern detected';
@@ -88,6 +125,16 @@ const fallbackEscalationForStatus = (status: string): string => {
   return 'Continue monitoring and call the vet if a new warning pattern appears';
 };
 
+const fallbackMonitorNextForStatus = (status: string): string[] => {
+  if (status === 'critical') {
+    return ['Persistent weakness', 'Breathing difficulty', 'Another critical heat period'];
+  }
+  if (status === 'warning' || status === 'watch') {
+    return ['Repeated warning hours', 'Lower activity', 'Rising heat load'];
+  }
+  return [];
+};
+
 const formatDateOnly = (date: Date): string => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -107,6 +154,30 @@ const getTemperatureStatus = (value?: number): string => {
   if (value > FEVER_THRESHOLD_C) return 'Fever risk';
   if (value >= FEVER_THRESHOLD_C - 0.5) return 'Monitor closely';
   return 'Normal range';
+};
+
+const getTemperatureChipConfig = (value?: number): { label: string; containerClassName: string; textClassName: string } | null => {
+  const status = getTemperatureStatus(value);
+  if (status === 'No temperature data') return null;
+  if (status === 'Fever risk') {
+    return {
+      label: 'Fever Risk',
+      containerClassName: 'bg-red-100',
+      textClassName: 'text-red-800',
+    };
+  }
+  if (status === 'Monitor closely') {
+    return {
+      label: 'Monitor Temp',
+      containerClassName: 'bg-yellow-100',
+      textClassName: 'text-yellow-800',
+    };
+  }
+  return {
+    label: 'Normal Temp',
+    containerClassName: 'bg-blue-100',
+    textClassName: 'text-blue-800',
+  };
 };
 
 const getActivityStatus = (value?: number): string => {
@@ -135,11 +206,29 @@ const getBackfillDateRange = (preset: BackfillRangePreset): { startDate: string;
 };
 
 const Analyze = () => {
+  const navigation = useNavigation<any>();
+  const { connectedDevice, connectionStatus, receivedData } = useBLEContext();
+  const isPigFitConnected = connectionStatus === 'connected' && !!connectedDevice;
   const [selectedPeriod, setSelectedPeriod] = useState<TrendPeriod>('12h');
   const [sensorData, setSensorData] = useState<SensorDataPoint[]>([]);
   const [trendData, setTrendData] = useState<SensorDataPoint[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hourlyAnalytics, setHourlyAnalytics] = useState<any | null>(null);
+  const previousConnectedRef = useRef(false);
+  const lastLiveTrendUpdateAtRef = useRef(0);
+  const lastProcessedLivePacketKeyRef = useRef<string | null>(null);
+  const liveTemp = receivedData?.temp ?? null;
+  const liveEnvTemp = receivedData?.envTemp ?? null;
+  const liveHumidity = receivedData?.humidity ?? null;
+  const liveActivityIntensity = receivedData?.activityIntensity ?? null;
+  const livePitchAngle = receivedData?.pitchAngle ?? null;
+  const liveAccelX = receivedData?.accelX ?? null;
+  const liveAccelY = receivedData?.accelY ?? null;
+  const liveAccelZ = receivedData?.accelZ ?? null;
+  const liveGyroX = receivedData?.gyroX ?? null;
+  const liveGyroY = receivedData?.gyroY ?? null;
+  const liveGyroZ = receivedData?.gyroZ ?? null;
+  const liveFeedingPostureDetected = receivedData?.feedingPostureDetected ?? null;
 
   // Debug panel state
   const [showDebugPanel, setShowDebugPanel] = useState(false);
@@ -177,11 +266,12 @@ const Analyze = () => {
       const status = row?.severity ?? 'warning';
       const display = toHourlyInsightDisplayData(parsed, {
         status,
-        confidence: typeof row?.confidence === 'number' ? row.confidence : null,
-        probableIssue: fallbackProbableIssue(row?.summary),
-        evidence: [row?.summary ?? 'No evidence available'].filter(Boolean),
-        actions: fallbackActionsForStatus(status),
-        escalation: fallbackEscalationForStatus(status),
+        summary: row?.summary ?? 'No summary available for this period',
+        observedPattern: fallbackObservedPattern(row?.summary),
+        keyEvidence: [row?.summary ?? 'No evidence available'].filter(Boolean),
+        recommendedAction: fallbackActionsForStatus(status),
+        escalationNote: fallbackEscalationForStatus(status),
+        dataQualityNote: 'Assessment unavailable for this period',
       });
 
       return {
@@ -203,13 +293,19 @@ const Analyze = () => {
       title: row.bucket_day ? `Daily • ${row.bucket_day}` : 'Daily Assessment',
       ...toDailyAssessmentDisplayData(parsed, {
         status,
-        probableIssue: fallbackProbableIssue(row?.summary),
-        evidence: [row?.summary ?? 'No evidence available'].filter(Boolean),
-        actions: fallbackActionsForStatus(status),
-        escalation: fallbackEscalationForStatus(status),
+        summary: row?.summary ?? 'No daily summary available',
+        observedPattern: fallbackObservedPattern(row?.summary),
+        keyEvidence: [row?.summary ?? 'No evidence available'].filter(Boolean),
+        recommendedAction: fallbackActionsForStatus(status),
+        escalationNote: fallbackEscalationForStatus(status),
+        monitorNext: fallbackMonitorNextForStatus(status),
+        dataQualityNote:
+          successfulHourlyInsights < MIN_HOURLY_INSIGHTS_FOR_DAILY
+            ? 'Limited by incomplete daily coverage'
+            : 'Assessment unavailable for this period',
       }),
     };
-  }, [deterministicData]);
+  }, [deterministicData, successfulHourlyInsights]);
 
   const toLocalDateString = (ms: number): string => {
     const d = new Date(ms);
@@ -228,37 +324,148 @@ const Analyze = () => {
     setHourlyAnalytics(analytics);
   };
 
-  // Load sensor data when period changes
+  const loadPersistedTrendWindow = async () => {
+    setIsLoading(true);
+    try {
+      const periodHoursMap: Record<TrendPeriod, number> = {
+        '30m': 0.5,
+        '1h': 1,
+        '4h': 4,
+        '12h': 12,
+      };
+
+      const hours = periodHoursMap[selectedPeriod];
+      const [rawData, aggregatedTrendData, analytics] = await Promise.all([
+        loadSensorData(hours, SUPPORTED_PIG_ID),
+        loadTrendData(selectedPeriod, SUPPORTED_PIG_ID),
+        getCurrentHourlyAnalytics(SUPPORTED_PIG_ID),
+      ]);
+
+      setSensorData(rawData);
+      setTrendData(aggregatedTrendData);
+      setHourlyAnalytics(analytics);
+      console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${SUPPORTED_PIG_ID} (${selectedPeriod})`);
+    } catch (error) {
+      console.error('Error loading sensor data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Load persisted baseline data when the selected period changes.
   useEffect(() => {
+    let active = true;
+
     const loadData = async () => {
-      setIsLoading(true);
       try {
-        // Map period to hours
-        const periodHoursMap: Record<TrendPeriod, number> = {
-          '30m': 0.5,
-          '1h': 1,
-          '4h': 4,
-          '12h': 12,
-        };
-        
-        const hours = periodHoursMap[selectedPeriod];
-        const [rawData, aggregatedTrendData] = await Promise.all([
-          loadSensorData(hours, SUPPORTED_PIG_ID),
-          loadTrendData(selectedPeriod, SUPPORTED_PIG_ID),
-        ]);
-        setSensorData(rawData);
-        setTrendData(aggregatedTrendData);
-        setHourlyAnalytics(await getCurrentHourlyAnalytics(SUPPORTED_PIG_ID));
-        console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${SUPPORTED_PIG_ID} (${selectedPeriod})`);
+        await loadPersistedTrendWindow();
+        if (!active) return;
       } catch (error) {
         console.error('Error loading sensor data:', error);
-      } finally {
-        setIsLoading(false);
       }
     };
-    
+
     loadData();
+    return () => {
+      active = false;
+    };
   }, [selectedPeriod]);
+
+  // Reload the persisted baseline when a BLE session becomes connected.
+  useEffect(() => {
+    if (isPigFitConnected && !previousConnectedRef.current) {
+      void loadPersistedTrendWindow();
+    }
+    previousConnectedRef.current = isPigFitConnected;
+  }, [isPigFitConnected]);
+
+  const livePacketKey = [
+    liveTemp,
+    liveEnvTemp,
+    liveHumidity,
+    liveActivityIntensity,
+    livePitchAngle,
+    liveAccelX,
+    liveAccelY,
+    liveAccelZ,
+    liveGyroX,
+    liveGyroY,
+    liveGyroZ,
+    liveFeedingPostureDetected === null ? null : liveFeedingPostureDetected ? 1 : 0,
+  ].join('|');
+
+  useEffect(() => {
+    if (
+      !isPigFitConnected ||
+      liveTemp === null ||
+      liveEnvTemp === null ||
+      liveHumidity === null ||
+      liveActivityIntensity === null ||
+      livePitchAngle === null
+    ) {
+      lastProcessedLivePacketKeyRef.current = null;
+      return;
+    }
+
+    if (livePacketKey === lastProcessedLivePacketKeyRef.current) {
+      return;
+    }
+    lastProcessedLivePacketKeyRef.current = livePacketKey;
+
+    const timestamp = Date.now();
+    if (timestamp - lastLiveTrendUpdateAtRef.current < LIVE_TREND_UI_THROTTLE_MS) {
+      return;
+    }
+    lastLiveTrendUpdateAtRef.current = timestamp;
+
+    const livePoint: SensorDataPoint = {
+      timestamp,
+      temp: liveTemp,
+      envTemp: liveEnvTemp,
+      humidity: liveHumidity,
+      activityIntensity: liveActivityIntensity,
+      pitchAngle: livePitchAngle,
+      accelX: liveAccelX ?? undefined,
+      accelY: liveAccelY ?? undefined,
+      accelZ: liveAccelZ ?? undefined,
+      gyroX: liveGyroX ?? undefined,
+      gyroY: liveGyroY ?? undefined,
+      gyroZ: liveGyroZ ?? undefined,
+      feedingPostureDetected: Boolean(liveFeedingPostureDetected),
+      thi: calculateTHI(liveEnvTemp, liveHumidity),
+    };
+
+    setTrendData((prev) => {
+      const windowStart = timestamp - PERIOD_DURATION_MS[selectedPeriod];
+      const trimmed = prev.filter((point) => Number(point.timestamp) >= windowStart);
+      const next = [...trimmed];
+      const lastPoint = next[next.length - 1];
+
+      if (lastPoint && Math.abs(Number(lastPoint.timestamp) - timestamp) <= LIVE_PACKET_REPLACE_WINDOW_MS) {
+        next[next.length - 1] = livePoint;
+      } else {
+        next.push(livePoint);
+      }
+
+      return next.filter((point) => Number(point.timestamp) >= windowStart);
+    });
+  }, [
+    isPigFitConnected,
+    livePacketKey,
+    liveTemp,
+    liveEnvTemp,
+    liveHumidity,
+    liveActivityIntensity,
+    livePitchAngle,
+    liveAccelX,
+    liveAccelY,
+    liveAccelZ,
+    liveGyroX,
+    liveGyroY,
+    liveGyroZ,
+    liveFeedingPostureDetected,
+    selectedPeriod,
+  ]);
 
   // Load deterministic outputs for current pig/day
   useEffect(() => {
@@ -400,6 +607,47 @@ const Analyze = () => {
   const axisTextStyle = { fontSize: 10, color: '#666' };
   const chartSpacing = (count: number) => (count > 10 ? (width - 100) / count : 45);
   const latestTrendPoint = trendData.length > 0 ? trendData[trendData.length - 1] : null;
+  const temperatureChip = useMemo(() => getTemperatureChipConfig(latestTrendPoint?.temp), [latestTrendPoint?.temp]);
+  const activeEventChips = useMemo(() => {
+    if (!hourlyAnalytics) return [];
+
+    const chips: Array<{ label: string; containerClassName: string; textClassName: string }> = [];
+    const fever = Number(hourlyAnalytics.fever_event_count ?? 0);
+    const heat = Number(hourlyAnalytics.heat_stress_event_count ?? 0);
+    const severeHeat = Number(hourlyAnalytics.severe_heat_event_count ?? 0);
+    const lethargy = Number(hourlyAnalytics.lethargy_alert ?? 0);
+
+    if (fever > 0) {
+      chips.push({
+        label: 'Fever',
+        containerClassName: 'bg-red-100',
+        textClassName: 'text-red-800',
+      });
+    }
+    if (heat > 0) {
+      chips.push({
+        label: 'Heat',
+        containerClassName: 'bg-amber-100',
+        textClassName: 'text-amber-800',
+      });
+    }
+    if (severeHeat > 0) {
+      chips.push({
+        label: 'Severe Heat',
+        containerClassName: 'bg-orange-100',
+        textClassName: 'text-orange-800',
+      });
+    }
+    if (lethargy > 0) {
+      chips.push({
+        label: 'Lethargy',
+        containerClassName: 'bg-purple-100',
+        textClassName: 'text-purple-800',
+      });
+    }
+
+    return chips;
+  }, [hourlyAnalytics]);
 
   const renderTrendChartCard = ({
     title,
@@ -483,11 +731,13 @@ const Analyze = () => {
       id: string;
       title: string;
       status: string;
-      confidence: number | null;
-      probableIssue: string;
-      evidence: string[];
-      actions: string[];
-      escalation: string;
+      summary: string;
+      observedPattern: string;
+      keyEvidence: string[];
+      recommendedAction: string[];
+      escalationNote: string;
+      monitorNext?: string[];
+      dataQualityNote?: string;
     },
     empty?: boolean
   ) => {
@@ -495,46 +745,62 @@ const Analyze = () => {
     return (
       <View
         key={card.id}
-        className={`w-72 bg-white rounded-xl border border-gray-200 p-4 mr-3 ${empty ? 'opacity-80' : ''}`}
+        className={`w-72 bg-white rounded-xl border p-4 mr-3 ${empty ? 'opacity-80' : ''}`}
+        style={{ borderColor: ui.borderColor, borderLeftWidth: 4 }}
       >
-        <View className="flex-row justify-between items-start mb-3">
-          <View className="flex-1 pr-2">
-            <Text className="text-sm font-semibold text-gray-900">{card.title}</Text>
-            <Text className="text-xs text-gray-500 mt-1">
-              Confidence:{' '}
-              <Text className="font-semibold text-gray-700">
-                {card.confidence == null ? '--' : `${Math.round(card.confidence * 100)}%`}
-              </Text>
+        <Text className="text-sm font-semibold text-gray-900 mb-3">{card.title}</Text>
+
+        <View className="flex-row justify-between items-center mb-3">
+          <View className="flex-row items-center flex-1 pr-2">
+            <View className="w-2.5 h-2.5 rounded-full mr-2" style={{ backgroundColor: ui.dotColor }} />
+            <Text className={`text-xs font-semibold uppercase tracking-wide ${ui.badgeText}`}>
+              Status: {ui.label}
             </Text>
           </View>
-          <View className={`px-3 py-1 rounded-full ${ui.badgeBg}`}>
-            <Text className={`text-xs font-medium ${ui.badgeText}`}>{ui.label}</Text>
-          </View>
+          {card.dataQualityNote ? (
+            <View className="px-2 py-1 rounded-full bg-gray-100">
+              <Text className="text-[10px] font-semibold text-gray-600">Limited data</Text>
+            </View>
+          ) : null}
         </View>
 
-        <Text className="text-xs text-gray-500 mb-1">Probable issue</Text>
-        <Text className="text-sm font-semibold text-gray-900 mb-3">{card.probableIssue}</Text>
+        <Text className="text-lg font-bold text-gray-900 mb-1">{card.observedPattern}</Text>
+        <Text className="text-sm text-gray-500 mb-4">{card.summary}</Text>
 
-        <Text className="text-xs text-gray-500 mb-1">Top evidence</Text>
+        <Text className="text-xs font-semibold text-gray-500 uppercase mb-1">Key evidence</Text>
         <View className="mb-3">
-          {card.evidence.slice(0, 3).map((item, index) => (
+          {card.keyEvidence.slice(0, 3).map((item, index) => (
             <Text key={`${card.id}-e-${index}`} className="text-xs text-gray-700 mb-1">
               • {item}
             </Text>
           ))}
         </View>
 
-        <Text className="text-xs text-gray-500 mb-1">Actions</Text>
+        <Text className="text-xs font-semibold text-gray-500 uppercase mb-1">Recommended action</Text>
         <View className="mb-3">
-          {card.actions.slice(0, 3).map((item, index) => (
+          {card.recommendedAction.slice(0, 3).map((item, index) => (
             <Text key={`${card.id}-a-${index}`} className="text-xs text-gray-700 mb-1">
               • {item}
             </Text>
           ))}
         </View>
 
-        <Text className="text-xs text-gray-500 mb-1">Escalation</Text>
-        <Text className="text-xs text-gray-700">{card.escalation}</Text>
+        {card.monitorNext && card.monitorNext.length > 0 ? (
+          <View className="mb-3">
+            <Text className="text-xs font-semibold text-gray-500 uppercase mb-1">Monitor next</Text>
+            <Text className="text-xs italic text-gray-700">{card.monitorNext.slice(0, 3).join(', ')}</Text>
+          </View>
+        ) : null}
+
+        <Text className="text-xs font-semibold text-gray-500 uppercase mb-1">Escalation</Text>
+        <Text className="text-xs text-gray-700">{card.escalationNote}</Text>
+
+        {card.dataQualityNote ? (
+          <View className="mt-3">
+            <Text className="text-xs font-semibold text-gray-500 uppercase mb-1">Data quality</Text>
+            <Text className="text-xs text-gray-600">{card.dataQualityNote}</Text>
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -579,18 +845,20 @@ const Analyze = () => {
     }
   };
 
+  const handleBackPress = () => {
+    navigation.navigate('Dashboard');
+  };
+
   return (
     <View className="flex-1 bg-gray-100">
       {/* Header */}
       <View className="flex-row justify-between items-center px-5 pt-12 pb-4 bg-white">
-        <TouchableOpacity>
+        <TouchableOpacity onPress={handleBackPress}>
           <Ionicons name="arrow-back" size={24} color="#4B5563" />
           {/* <Text className="text-2xl text-gray-800">←</Text> */}
         </TouchableOpacity>
         <Text className="text-lg font-semibold text-gray-800">Analyze</Text>
-        <TouchableOpacity onPress={() => { setShowDebugPanel(true); checkDatabaseStats(); }}>
-          <Text className="text-sm font-semibold text-blue-700">Admin</Text>
-        </TouchableOpacity>
+        <View className="w-10" />
       </View>
 
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
@@ -606,24 +874,29 @@ const Analyze = () => {
         </View>
 
         {/* Selected Pig Info */}
-        <View className="flex-row justify-between px-4 py-3 bg-white mx-4 mb-3 rounded-xl">
-          <View className="flex-1">
-            <Text className="text-xl font-bold text-gray-800 mb-2">{SUPPORTED_PIG_ID}</Text>
-            <Text className="text-xs text-gray-500 mb-2">Current supported pig in Analyze</Text>
-            <View className="flex-row gap-2">
-              <View className="px-2.5 py-1 rounded-xl bg-green-500">
+        <View className="px-4 py-4 bg-white mx-4 mb-3 rounded-xl">
+          <Text className="text-xl font-bold text-gray-800">{SUPPORTED_PIG_ID}</Text>
+          <View className="mt-3 flex-row flex-wrap items-center -mb-2">
+            {isPigFitConnected ? (
+              <View className="self-start mr-2 mb-2 px-2.5 py-1 rounded-xl bg-green-100">
                 <Text className="text-[11px] text-green-800 font-medium">Active</Text>
               </View>
-              <View className="px-2.5 py-1 rounded-xl bg-green-100">
-                <Text className="text-[11px] text-green-800 font-medium">Normal Temp</Text>
+            ) : null}
+            {temperatureChip ? (
+              <View className={`self-start mr-2 mb-2 px-2.5 py-1 rounded-xl ${temperatureChip.containerClassName}`}>
+                <Text className={`text-[11px] font-medium ${temperatureChip.textClassName}`}>{temperatureChip.label}</Text>
               </View>
+            ) : null}
+          </View>
+          {activeEventChips.length > 0 ? (
+            <View className="mt-2 flex-row flex-wrap items-center -mb-2">
+              {activeEventChips.map((chip) => (
+                <View key={chip.label} className={`self-start mr-2 mb-2 px-2.5 py-1 rounded-xl ${chip.containerClassName}`}>
+                  <Text className={`text-[11px] font-medium ${chip.textClassName}`}>{chip.label}</Text>
+                </View>
+              ))}
             </View>
-          </View>
-          <View className="bg-gray-100 px-4 py-3 rounded-lg items-center justify-center">
-            <Text className="text-[11px] text-gray-600 mb-1">Health Index</Text>
-            <Text className="text-[32px] font-bold text-green-500">92</Text>
-            <Text className="text-sm text-gray-400">/100</Text>
-          </View>
+          ) : null}
         </View>
 
         {/* Hourly Insights */}
@@ -648,11 +921,12 @@ const Analyze = () => {
                     id: 'hourly-empty',
                     title: 'No hourly insight yet',
                     status: 'watch',
-                    confidence: null,
-                    probableIssue: 'Waiting for a successful hourly assessment',
-                    evidence: ['No successful hourly insight is stored for this day yet'],
-                    actions: ['Collect more hourly data', 'Wait for the next completed hourly run'],
-                    escalation: 'Continue monitoring until a valid hourly insight is available',
+                    summary: 'No successful hourly insight is stored for this day yet.',
+                    observedPattern: 'Waiting for a completed hourly assessment',
+                    keyEvidence: ['No successful hourly insight is stored for this day yet'],
+                    recommendedAction: ['Collect more hourly data', 'Wait for the next completed hourly run'],
+                    escalationNote: 'Continue monitoring until a valid hourly insight is available',
+                    dataQualityNote: 'Assessment unavailable for this period',
                   },
                   true
                 )}
@@ -691,11 +965,7 @@ const Analyze = () => {
               </View>
             </TouchableOpacity>
           </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingLeft: 16, paddingRight: 4 }}
-          >
+          <View className="px-4">
             {dailyInsightCard
               ? renderInsightCard(dailyInsightCard)
               : renderInsightCard(
@@ -703,15 +973,17 @@ const Analyze = () => {
                     id: 'daily-empty',
                     title: 'No daily assessment yet',
                     status: 'watch',
-                    confidence: null,
-                    probableIssue: 'Daily assessment pending',
-                    evidence: [`Need ${MIN_HOURLY_INSIGHTS_FOR_DAILY} successful hourly insights before generation`],
-                    actions: ['Wait for more hourly insights', 'Run the daily assessment once enough data is available'],
-                    escalation: 'Continue monitoring until the daily assessment is generated',
+                    summary: 'A daily assessment will appear after enough hourly insights are available.',
+                    observedPattern: 'Daily monitoring summary pending',
+                    keyEvidence: [`Need ${MIN_HOURLY_INSIGHTS_FOR_DAILY} successful hourly insights before generation`],
+                    recommendedAction: ['Wait for more hourly insights', 'Run the daily assessment once enough data is available'],
+                    escalationNote: 'Continue monitoring until the daily assessment is generated',
+                    monitorNext: ['Repeated warning hours', 'Lower activity', 'Rising heat load'],
+                    dataQualityNote: 'Limited by incomplete daily coverage',
                   },
                   true
                 )}
-          </ScrollView>
+          </View>
         </View>
 
         {/* Trends Section */}
@@ -830,155 +1102,6 @@ const Analyze = () => {
         <View className="h-24" />
       </ScrollView>
 
-      {/* Admin Tools Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={showDebugPanel}
-        onRequestClose={() => setShowDebugPanel(false)}
-      >
-        <View className="flex-1 bg-black bg-opacity-50 justify-end">
-          <View className="bg-white rounded-t-2xl p-4 max-h-96">
-            {/* Header */}
-            <View className="flex-row justify-between items-center mb-4">
-              <Text className="text-lg font-bold text-gray-900">Admin Tools</Text>
-              <TouchableOpacity onPress={() => setShowDebugPanel(false)}>
-                <Text className="text-2xl text-gray-600">✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Stats Display */}
-            <ScrollView>
-              {dbStats ? (
-                <>
-                  <View className="bg-gray-100 p-3 rounded-lg mb-3">
-                    <Text className="text-xs text-gray-600 mb-2">
-                      <Text className="font-bold">Last checked:</Text> {dbStats.timestamp}
-                    </Text>
-                    <Text className="text-sm font-semibold text-gray-800 mb-1">
-                      Raw Sensor Records: <Text className="text-green-600">{dbStats.rawSensorRecords}</Text>
-                    </Text>
-                    <Text className="text-sm font-semibold text-gray-800">
-                      Hourly Aggregates: <Text className="text-blue-600">{dbStats.hourlyAggregates}</Text>
-                    </Text>
-                  </View>
-
-                  {dbStats.latestRecord && (
-                    <View className="bg-gray-50 p-3 rounded-lg mb-3">
-                      <Text className="text-xs font-bold text-gray-700 mb-2">Latest Record:</Text>
-                      <Text className="text-xs text-gray-600 mb-1">
-                        Temp: {dbStats.latestRecord.temp.toFixed(1)}°C
-                      </Text>
-                      <Text className="text-xs text-gray-600 mb-1">
-                        Activity: {dbStats.latestRecord.activityIntensity.toFixed(2)}g
-                      </Text>
-                      <Text className="text-xs text-gray-600 mb-1">
-                        Pitch: {dbStats.latestRecord.pitchAngle.toFixed(1)}°
-                      </Text>
-                      <Text className="text-xs text-gray-600">
-                        Time: {new Date(dbStats.latestRecord.timestamp).toLocaleString()}
-                      </Text>
-                    </View>
-                  )}
-                </>
-              ) : (
-                <Text className="text-sm text-gray-500">Loading...</Text>
-              )}
-            </ScrollView>
-
-            {/* Refresh Button */}
-            <TouchableOpacity 
-              className="bg-blue-600 py-2 rounded-lg items-center mt-3"
-              onPress={checkDatabaseStats}
-            >
-              <Text className="text-white font-semibold text-sm">🔄 Refresh Stats</Text>
-            </TouchableOpacity>
-
-            <View className="mt-3">
-              <Text className="text-xs font-semibold text-gray-700 mb-2">Backfill range</Text>
-              <View className="flex-row gap-2">
-                {(['7d', '30d', 'all'] as BackfillRangePreset[]).map((preset) => {
-                  const selected = backfillRangePreset === preset;
-                  const label = preset === '7d' ? '7 Days' : preset === '30d' ? '30 Days' : 'All';
-                  return (
-                    <TouchableOpacity
-                      key={preset}
-                      className={`px-3 py-1.5 rounded-full border ${
-                        selected ? 'bg-amber-50 border-amber-500' : 'bg-white border-gray-300'
-                      }`}
-                      onPress={() => setBackfillRangePreset(preset)}
-                      disabled={isBackfillingInsights}
-                    >
-                      <Text className={`text-xs font-medium ${selected ? 'text-amber-700' : 'text-gray-700'}`}>
-                        {label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-
-            <TouchableOpacity
-              className={`py-2 rounded-lg items-center mt-3 ${
-                isBackfillingInsights ? 'bg-gray-400' : 'bg-amber-600'
-              }`}
-              onPress={handleBackfillDeterministicInsights}
-              disabled={isBackfillingInsights}
-            >
-              <Text className="text-white font-semibold text-sm">
-                {isBackfillingInsights
-                  ? 'Backfilling v2 Insights...'
-                  : `🗂️ Backfill ${SUPPORTED_PIG_ID} to v2`}
-              </Text>
-            </TouchableOpacity>
-
-            {backfillProgress && (
-              <View className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
-                <Text className="text-xs font-medium text-amber-800">
-                  {backfillProgress.stage === 'hourly'
-                    ? `Hourly backfill ${backfillProgress.current}/${backfillProgress.total}`
-                    : backfillProgress.stage === 'daily'
-                      ? `Daily backfill ${backfillProgress.current}/${backfillProgress.total}`
-                      : 'Backfill complete'}
-                </Text>
-                <Text className="text-[11px] text-amber-700 mt-1">
-                  {backfillProgress.label}
-                </Text>
-              </View>
-            )}
-
-            {/* Deterministic schema test trigger */}
-            <TouchableOpacity
-              className={`py-2 rounded-lg items-center mt-3 ${
-                isRunningDeterministicTests ? 'bg-gray-400' : 'bg-green-600'
-              }`}
-              onPress={handleRunDeterministicSchemaTests}
-              disabled={isRunningDeterministicTests}
-            >
-              <Text className="text-white font-semibold text-sm">
-                {isRunningDeterministicTests
-                  ? 'Running Deterministic Tests...'
-                  : '🧪 Run Deterministic Schema Tests'}
-              </Text>
-            </TouchableOpacity>
-
-            {deterministicTestResult && (
-              <View className="mt-3 p-3 rounded-lg bg-gray-100">
-                <Text
-                  className={`text-xs font-medium ${
-                    deterministicTestResult.startsWith('PASS') ? 'text-green-700' : 'text-red-700'
-                  }`}
-                >
-                  {deterministicTestResult}
-                </Text>
-                <Text className="text-[11px] text-gray-600 mt-1">
-                  Check Metro logs for detailed per-test output.
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };

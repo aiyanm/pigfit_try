@@ -338,6 +338,8 @@ export default function DashboardScreen() {
     connectedDevice,
     connectedDeviceName,
     receivedData,
+    connectionStatus,
+    reconnectAttemptCount,
   } = useBLEContext();
 
   const [feedingSession, setFeedingSession] = useState<FeedingConfirmationSession | null>(() =>
@@ -390,6 +392,12 @@ export default function DashboardScreen() {
 
   const currentStatus = receivedData ? getStatus(receivedData.activityIntensity) : 'Waiting...';
   const healthIndex = receivedData ? 'Good' : '--';
+  const connectionLabel =
+    connectionStatus === 'reconnecting'
+      ? `Reconnecting to ${connectedDeviceName || 'PigFit Device'}${reconnectAttemptCount > 0 ? ` (attempt ${reconnectAttemptCount})` : ''}`
+      : connectedDevice
+        ? `Connected to ${connectedDeviceName || connectedDevice.name}`
+        : 'No device connected';
 
   return (
     <View className="flex-1 bg-gray-100">
@@ -397,7 +405,7 @@ export default function DashboardScreen() {
         <View className="flex-1">
           <Text className="text-xl font-bold text-gray-800">Farm Monitor</Text>
           <Text className="text-sm text-gray-500 mt-1">
-            {connectedDevice ? `Connected to ${connectedDeviceName || connectedDevice.name}` : 'No device connected'}
+            {connectionLabel}
           </Text>
         </View>
       </View>

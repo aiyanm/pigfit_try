@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-const DB_SCHEMA_VERSION = 4;
+const DB_SCHEMA_VERSION = 5;
 
 interface SensorData {
   timestamp: number;
@@ -129,6 +129,13 @@ interface DailyAssessment {
   status: 'success' | 'failed';
   error_code?: string | null;
   error_message?: string | null;
+}
+
+interface UserProfile {
+  farmer_name: string;
+  email: string;
+  farm_name: string;
+  location: string;
 }
 
 class DatabaseService {
@@ -492,6 +499,18 @@ class DatabaseService {
           pairing_date INTEGER NOT NULL,
           last_connected INTEGER,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      await this.db.execAsync(`
+        CREATE TABLE IF NOT EXISTS user_profile (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          farmer_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          farm_name TEXT NOT NULL,
+          location TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
       `);
 
@@ -1289,6 +1308,44 @@ class DatabaseService {
     }
   }
 
+  async getUserProfile(): Promise<UserProfile | null> {
+    try {
+      await this._ensureInitialized();
+      if (!this.db) return null;
+
+      const result = await this.db.getFirstAsync<UserProfile>(
+        `SELECT farmer_name, email, farm_name, location FROM user_profile WHERE id = 1 LIMIT 1`
+      );
+      return result || null;
+    } catch (error) {
+      console.error('❌ Error getting user profile:', error);
+      return null;
+    }
+  }
+
+  async upsertUserProfile(profile: UserProfile): Promise<void> {
+    try {
+      await this.enqueueWriteOperation(async () => {
+        if (!this.db) throw new Error('Database connection is null');
+
+        await this.db.runAsync(
+          `INSERT INTO user_profile (id, farmer_name, email, farm_name, location)
+           VALUES (1, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             farmer_name = excluded.farmer_name,
+             email = excluded.email,
+             farm_name = excluded.farm_name,
+             location = excluded.location,
+             updated_at = CURRENT_TIMESTAMP`,
+          [profile.farmer_name, profile.email, profile.farm_name, profile.location]
+        );
+      });
+    } catch (error) {
+      console.error('❌ Error upserting user profile:', error);
+      throw error;
+    }
+  }
+
   async upsertFeedingSchedule(data: FeedingSchedule): Promise<void> {
     try {
       await this.enqueueWriteOperation(async () => {
@@ -1348,4 +1405,4 @@ class DatabaseService {
 
 // Export singleton instance
 export const dbService = new DatabaseService();
-export type { SensorData, HourlyAggregate, HourlyInsight, DailyAssessment, FeedingSchedule };
+export type { SensorData, HourlyAggregate, HourlyInsight, DailyAssessment, FeedingSchedule, UserProfile };

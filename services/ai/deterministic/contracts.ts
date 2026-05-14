@@ -145,13 +145,36 @@ export const parseDailyAssessment = (raw: any): DailyAssessmentV2 | DailyAssessm
   parseDailyAssessmentV2(raw) ?? parseDailyAssessmentV1(raw);
 
 export interface InsightDisplayData {
-  status: 'normal' | 'warning' | 'watch' | 'critical';
-  confidence: number | null;
-  probableIssue: string;
-  evidence: string[];
-  actions: string[];
-  escalation: string;
+  status: 'normal' | 'watch' | 'critical';
+  summary: string;
+  observedPattern: string;
+  keyEvidence: string[];
+  recommendedAction: string[];
+  escalationNote: string;
+  monitorNext?: string[];
+  dataQualityNote?: string;
 }
+
+const normalizeInsightStatus = (status: unknown): InsightDisplayData['status'] => {
+  if (status === 'critical') return 'critical';
+  if (status === 'warning' || status === 'watch') return 'watch';
+  return 'normal';
+};
+
+const deriveDataQualityNote = (
+  parsedValue: HourlyInsightV2 | HourlyInsightV1 | DailyAssessmentV2 | DailyAssessmentV1 | null,
+  fallback?: Partial<InsightDisplayData>
+): string | undefined => {
+  if (!parsedValue) {
+    return fallback?.dataQualityNote ?? 'Assessment unavailable for this period';
+  }
+
+  if ('uncertainty_notes' in parsedValue && parsedValue.uncertainty_notes.length > 0) {
+    return parsedValue.uncertainty_notes[0];
+  }
+
+  return fallback?.dataQualityNote;
+};
 
 export const toHourlyInsightDisplayData = (
   insight: HourlyInsightV2 | HourlyInsightV1 | null,
@@ -159,33 +182,39 @@ export const toHourlyInsightDisplayData = (
 ): InsightDisplayData => {
   if (insight?.schema_version === 'hourly_insight_v2') {
     return {
-      status: insight.severity,
-      confidence: insight.confidence,
-      probableIssue: ensureNonEmptyString(insight.probable_issue, fallback?.probableIssue ?? 'Assessment pending'),
-      evidence: insight.key_evidence.slice(0, 3),
-      actions: insight.immediate_actions.slice(0, 3),
-      escalation: ensureNonEmptyString(insight.escalation_triggers[0], fallback?.escalation ?? 'Continue monitoring'),
+      status: normalizeInsightStatus(insight.severity),
+      summary: ensureNonEmptyString(insight.summary, fallback?.summary ?? 'Assessment pending'),
+      observedPattern: ensureNonEmptyString(insight.probable_issue, fallback?.observedPattern ?? 'Assessment pending'),
+      keyEvidence: insight.key_evidence.slice(0, 3),
+      recommendedAction: insight.immediate_actions.slice(0, 3),
+      escalationNote: ensureNonEmptyString(
+        insight.escalation_triggers[0],
+        fallback?.escalationNote ?? 'Continue monitoring'
+      ),
+      dataQualityNote: deriveDataQualityNote(insight, fallback),
     };
   }
 
   if (insight?.schema_version === 'hourly_insight_v1') {
     return {
-      status: insight.severity,
-      confidence: insight.confidence,
-      probableIssue: ensureNonEmptyString(fallback?.probableIssue, 'Assessment pending'),
-      evidence: (insight.key_signals.length > 0 ? insight.key_signals : fallback?.evidence ?? []).slice(0, 3),
-      actions: (fallback?.actions ?? []).slice(0, 3),
-      escalation: ensureNonEmptyString(fallback?.escalation, 'Continue monitoring'),
+      status: normalizeInsightStatus(insight.severity),
+      summary: ensureNonEmptyString(insight.summary, fallback?.summary ?? 'Assessment pending'),
+      observedPattern: ensureNonEmptyString(fallback?.observedPattern, 'Assessment pending'),
+      keyEvidence: (insight.key_signals.length > 0 ? insight.key_signals : fallback?.keyEvidence ?? []).slice(0, 3),
+      recommendedAction: (fallback?.recommendedAction ?? []).slice(0, 3),
+      escalationNote: ensureNonEmptyString(fallback?.escalationNote, 'Continue monitoring'),
+      dataQualityNote: deriveDataQualityNote(insight, fallback),
     };
   }
 
   return {
-    status: fallback?.status ?? 'warning',
-    confidence: fallback?.confidence ?? null,
-    probableIssue: ensureNonEmptyString(fallback?.probableIssue, 'Assessment pending'),
-    evidence: (fallback?.evidence ?? []).slice(0, 3),
-    actions: (fallback?.actions ?? []).slice(0, 3),
-    escalation: ensureNonEmptyString(fallback?.escalation, 'Continue monitoring'),
+    status: normalizeInsightStatus(fallback?.status),
+    summary: ensureNonEmptyString(fallback?.summary, 'Assessment pending'),
+    observedPattern: ensureNonEmptyString(fallback?.observedPattern, 'Assessment pending'),
+    keyEvidence: (fallback?.keyEvidence ?? []).slice(0, 3),
+    recommendedAction: (fallback?.recommendedAction ?? []).slice(0, 3),
+    escalationNote: ensureNonEmptyString(fallback?.escalationNote, 'Continue monitoring'),
+    dataQualityNote: deriveDataQualityNote(insight, fallback),
   };
 };
 
@@ -195,33 +224,42 @@ export const toDailyAssessmentDisplayData = (
 ): InsightDisplayData => {
   if (assessment?.schema_version === 'daily_assessment_v2') {
     return {
-      status: assessment.overall_status,
-      confidence: assessment.confidence,
-      probableIssue: ensureNonEmptyString(assessment.probable_issue, fallback?.probableIssue ?? 'Assessment pending'),
-      evidence: assessment.key_evidence.slice(0, 3),
-      actions: assessment.immediate_actions.slice(0, 3),
-      escalation: ensureNonEmptyString(assessment.escalation_triggers[0], fallback?.escalation ?? 'Continue monitoring'),
+      status: normalizeInsightStatus(assessment.overall_status),
+      summary: ensureNonEmptyString(assessment.summary, fallback?.summary ?? 'Assessment pending'),
+      observedPattern: ensureNonEmptyString(assessment.probable_issue, fallback?.observedPattern ?? 'Assessment pending'),
+      keyEvidence: assessment.key_evidence.slice(0, 3),
+      recommendedAction: assessment.immediate_actions.slice(0, 3),
+      escalationNote: ensureNonEmptyString(
+        assessment.escalation_triggers[0],
+        fallback?.escalationNote ?? 'Continue monitoring'
+      ),
+      monitorNext: assessment.monitor_next_24h.slice(0, 3),
+      dataQualityNote: deriveDataQualityNote(assessment, fallback),
     };
   }
 
   if (assessment?.schema_version === 'daily_assessment_v1') {
     return {
-      status: assessment.overall_status,
-      confidence: assessment.confidence,
-      probableIssue: ensureNonEmptyString(fallback?.probableIssue, 'Assessment pending'),
-      evidence: (assessment.key_observations.length > 0 ? assessment.key_observations : fallback?.evidence ?? []).slice(0, 3),
-      actions: (fallback?.actions ?? []).slice(0, 3),
-      escalation: ensureNonEmptyString(fallback?.escalation, 'Continue monitoring'),
+      status: normalizeInsightStatus(assessment.overall_status),
+      summary: ensureNonEmptyString(assessment.summary, fallback?.summary ?? 'Assessment pending'),
+      observedPattern: ensureNonEmptyString(fallback?.observedPattern, 'Assessment pending'),
+      keyEvidence: (assessment.key_observations.length > 0 ? assessment.key_observations : fallback?.keyEvidence ?? []).slice(0, 3),
+      recommendedAction: (fallback?.recommendedAction ?? []).slice(0, 3),
+      escalationNote: ensureNonEmptyString(fallback?.escalationNote, 'Continue monitoring'),
+      monitorNext: (fallback?.monitorNext ?? []).slice(0, 3),
+      dataQualityNote: deriveDataQualityNote(assessment, fallback),
     };
   }
 
   return {
-    status: fallback?.status ?? 'watch',
-    confidence: fallback?.confidence ?? null,
-    probableIssue: ensureNonEmptyString(fallback?.probableIssue, 'Assessment pending'),
-    evidence: (fallback?.evidence ?? []).slice(0, 3),
-    actions: (fallback?.actions ?? []).slice(0, 3),
-    escalation: ensureNonEmptyString(fallback?.escalation, 'Continue monitoring'),
+    status: normalizeInsightStatus(fallback?.status ?? 'watch'),
+    summary: ensureNonEmptyString(fallback?.summary, 'Assessment pending'),
+    observedPattern: ensureNonEmptyString(fallback?.observedPattern, 'Assessment pending'),
+    keyEvidence: (fallback?.keyEvidence ?? []).slice(0, 3),
+    recommendedAction: (fallback?.recommendedAction ?? []).slice(0, 3),
+    escalationNote: ensureNonEmptyString(fallback?.escalationNote, 'Continue monitoring'),
+    monitorNext: (fallback?.monitorNext ?? []).slice(0, 3),
+    dataQualityNote: deriveDataQualityNote(assessment, fallback),
   };
 };
 

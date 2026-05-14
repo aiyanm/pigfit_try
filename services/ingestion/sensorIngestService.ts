@@ -397,12 +397,26 @@ export const loadTrendData = async (periodType: TrendPeriod, pigId: string): Pro
   try {
     const now = Date.now();
     const periodStart = now - PERIOD_DURATION_MS[periodType];
+    const shortWindowPeriod = periodType === '30m' || periodType === '1h';
+
+    // Short windows should reflect the latest raw observations rather than
+    // previously materialized rollups, which can lag and look stale on app open.
+    if (shortWindowPeriod) {
+      const rawRows = await loadSensorData(periodType === '30m' ? 0.5 : 1, pigId);
+      return rawRows.map((row) => ({
+        ...row,
+        thi: row.thi ?? calculateTHI(Number(row.envTemp ?? 0), Number(row.humidity ?? 0)),
+      }));
+    }
+
     const aggregateRows = await dbService.getPeriodAggregates(periodType, pigId);
-    const windowRows = aggregateRows.filter((row: any) => row.bucket_start >= periodStart);
+    const windowRows = aggregateRows.filter(
+      (row: any) => Number(row.bucket_end ?? row.bucket_start ?? 0) >= periodStart
+    );
 
     if (windowRows.length > 0) {
       return windowRows.map((row: any) => ({
-        timestamp: row.bucket_start,
+        timestamp: Number(row.bucket_end ?? row.bucket_start),
         temp: row.mean_temp ?? 0,
         envTemp: row.mean_env_temp ?? 0,
         humidity: row.mean_humidity ?? 0,
