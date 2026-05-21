@@ -392,6 +392,7 @@ export default function DashboardScreen() {
 
   const currentStatus = receivedData ? getStatus(receivedData.activityIntensity) : 'Waiting...';
   const healthIndex = receivedData ? 'Good' : '--';
+  const emptyLiveDataMessage = connectedDevice ? 'Waiting for data...' : 'No live device connected.';
   const connectionLabel =
     connectionStatus === 'reconnecting'
       ? `Reconnecting to ${connectedDeviceName || 'PigFit Device'}${reconnectAttemptCount > 0 ? ` (attempt ${reconnectAttemptCount})` : ''}`
@@ -444,8 +445,8 @@ export default function DashboardScreen() {
             />
           ) : (
             <View className="p-5 items-center">
-              <ActivityIndicator size="large" color="#3498db" />
-              <Text className="mt-2.5 text-gray-600">Waiting for data...</Text>
+              {connectedDevice ? <ActivityIndicator size="large" color="#3498db" /> : null}
+              <Text className="mt-2.5 text-gray-600">{emptyLiveDataMessage}</Text>
             </View>
           )}
         </View>

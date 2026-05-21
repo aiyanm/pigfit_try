@@ -15,11 +15,11 @@ export default function App() {
     // Initialize service layer on app launch (DB + AI config)
     const initServices = async () => {
       try {
-        console.log('🚀 Initializing app services at startup...');
+        console.log('[App] Initializing app services at startup');
         await initializeAppServices();
-        console.log('✅ Services ready for data logging and analysis');
+        console.log('[App] Services ready for data logging and analysis');
       } catch (error) {
-        console.error('❌ Failed to initialize app services:', error);
+        console.error('[App] Failed to initialize app services:', error);
         // App continues even if DB fails, data will be queued for retry
       }
     };
@@ -27,11 +27,11 @@ export default function App() {
     // Initialize push notifications
     const initNotifications = async () => {
       try {
-        console.log('🚀 Initializing push notifications...');
+        console.log('[App] Initializing push notifications');
         await initializeNotifications();
-        console.log('✅ Push notifications ready');
+        console.log('[App] Push notifications ready');
       } catch (error) {
-        console.error('❌ Failed to initialize notifications:', error);
+        console.error('[App] Failed to initialize notifications:', error);
       }
     };
 
@@ -40,9 +40,9 @@ export default function App() {
       try {
         await Promise.all([initServices(), initNotifications()]);
         setIsInitialized(true);
-        console.log('🎯 App fully initialized - navigation ready');
+        console.log('[App] App fully initialized - navigation ready');
       } catch (error) {
-        console.error('⚠️ Initialization error caught:', error);
+        console.error('[App] Initialization error caught:', error);
         // Still mark as initialized to allow app to continue
         setIsInitialized(true);
       }

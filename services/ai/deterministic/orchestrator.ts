@@ -96,7 +96,7 @@ const runDeterministicStructured = async (
       };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Unknown provider error');
-      console.warn(`⚠️ Deterministic provider failed (${provider.name}): ${lastError.message}`);
+      console.warn(`[AI] Deterministic provider failed (${provider.name}): ${lastError.message}`);
     }
   }
 

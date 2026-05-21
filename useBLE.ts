@@ -30,7 +30,6 @@ const PACKET_VERSION_V2 = 0x02;
 const LEGACY_PACKET_SIZE = 32;
 const RAW_AXES_PACKET_SIZE = 48;
 const UI_UPDATE_THROTTLE_MS = 200;
-const LOG_BLE_PACKETS = false;
 
 const calculateActivityIntensity = (accelX: number, accelY: number, accelZ: number): number =>
   Math.sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
@@ -167,28 +166,28 @@ function useBLE(): BluetoothLowEnergyApi {
     try {
       const device = await dbService.getDevice(deviceId);
       if (device) {
-        console.log("✅ Loaded device metadata:", device.device_name);
+        console.log("[Device] Loaded device metadata:", device.device_name);
         setConnectedDeviceName(device.device_name);
         return device.device_name;
       }
       return null;
     } catch (error) {
-      console.error("❌ Error loading device metadata:", error);
+      console.error("[Device] Error loading device metadata:", error);
       return null;
     }
   };
 
   const updateConnectedDeviceName = async (newName: string): Promise<void> => {
     if (!connectedDevice) {
-      console.warn("⚠️ No connected device to rename");
+      console.warn("[Device] No connected device to rename");
       return;
     }
     try {
       await dbService.updateDeviceName(connectedDevice.id, newName);
       setConnectedDeviceName(newName);
-      console.log("✅ Device name updated to:", newName);
+      console.log("[Device] Device name updated to:", newName);
     } catch (error) {
-      console.error("❌ Error updating device name:", error);
+      console.error("[Device] Error updating device name:", error);
       throw error;
     }
   };
@@ -207,14 +206,14 @@ function useBLE(): BluetoothLowEnergyApi {
         results[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === PermissionsAndroid.RESULTS.GRANTED
       );
     } catch (error) {
-      console.log("❌ Android 12+ permission request failed:", error);
+      console.log("[Permissions] Android 12+ permission request failed:", error);
       setBleError("Bluetooth permissions could not be requested. Please enable Nearby devices and Location permissions in Settings.");
       return false;
     }
   };
 
   const requestPermissions = async () => {
-    console.log(">>> Requesting permissions...");
+    console.log("[Permissions] Requesting permissions");
     if (Platform.OS === "android") {
       if ((ExpoDevice.platformApiLevel ?? -1) < 31) {
         try {
@@ -228,7 +227,7 @@ function useBLE(): BluetoothLowEnergyApi {
           );
           return granted === PermissionsAndroid.RESULTS.GRANTED;
         } catch (error) {
-          console.log("❌ Android permission request failed:", error);
+          console.log("[Permissions] Android permission request failed:", error);
           setBleError("Location permission could not be requested. Please enable it in Settings.");
           return false;
         }
@@ -263,9 +262,9 @@ function useBLE(): BluetoothLowEnergyApi {
 
     try {
       const mtu = await deviceConnection.requestMTU(64);
-      console.log(`✅ MTU negotiated: ${mtu} bytes`);
+      console.log(`[BLE] MTU negotiated: ${mtu} bytes`);
     } catch (mtuError) {
-      console.log("⚠️ MTU request failed, using default:", mtuError);
+      console.log("[BLE] MTU request failed, using default:", mtuError);
     }
 
     try {
@@ -277,14 +276,14 @@ function useBLE(): BluetoothLowEnergyApi {
         const autoName = fallbackName || `PigFit - ${dateStr}`;
         await dbService.saveDevice(deviceId, deviceId, autoName);
         setConnectedDeviceName(autoName);
-        console.log("✅ New device saved with name:", autoName);
+        console.log("[Device] New device saved with name:", autoName);
       } else {
         setConnectedDeviceName(existingDevice.device_name);
-        console.log("✅ Device loaded with name:", existingDevice.device_name);
+        console.log("[Device] Device loaded with name:", existingDevice.device_name);
       }
       await dbService.updateDeviceLastConnected(deviceId);
     } catch (dbError) {
-      console.error("❌ Error saving/loading device metadata:", dbError);
+      console.error("[Device] Error saving/loading device metadata:", dbError);
       setConnectedDeviceName(fallbackName || "PigFit Device");
     }
 
@@ -330,7 +329,7 @@ function useBLE(): BluetoothLowEnergyApi {
     const subscription = manager.onDeviceDisconnected(
       device.id,
       async (error) => {
-        console.log(`⚠️ Device ${device.name} disconnected:`, error);
+        console.log(`[BLE] Device ${device.name} disconnected:`, error);
         const wasManualDisconnect = manualDisconnectRef.current;
         manualDisconnectRef.current = false;
         clearPendingUiUpdate();
@@ -385,7 +384,7 @@ function useBLE(): BluetoothLowEnergyApi {
 
         if (scanError) {
           settle(() => {
-            console.log("❌ Reconnect scan error:", scanError);
+            console.log("[BLE] Reconnect scan error:", scanError);
             stopScan("error");
             reject(scanError);
           });
@@ -437,11 +436,11 @@ function useBLE(): BluetoothLowEnergyApi {
 
         void connectToDeviceById(target.id, target.name)
           .catch(async (directError) => {
-            console.log("⚠️ Direct reconnect failed, scanning for device:", directError);
+            console.log("[BLE] Direct reconnect failed, scanning for device:", directError);
             try {
               await attemptReconnectScan(target.id, target.name);
             } catch (scanError) {
-              console.log("⚠️ Reconnect scan failed:", scanError);
+              console.log("[BLE] Reconnect scan failed:", scanError);
               setBleError("PigFit device disconnected. Retrying connection...");
               scheduleReconnect();
             }
@@ -492,7 +491,7 @@ function useBLE(): BluetoothLowEnergyApi {
     }
 
     try {
-      console.log(">>> Starting BLE scan...");
+      console.log("[BLE] Starting BLE scan");
       const sessionId = scanSessionIdRef.current + 1;
       scanSessionIdRef.current = sessionId;
 
@@ -509,7 +508,7 @@ function useBLE(): BluetoothLowEnergyApi {
 
         scanTimeoutRef.current = setTimeout(() => {
           if (scanSessionIdRef.current !== sessionId || connectedDevice) return;
-          console.log(">>> Scan timed out without finding PigFit device");
+          console.log("[BLE] Scan timed out without finding PigFit device");
           setBleError("Could not find PigFit device. Please ensure your device is powered on and in range.");
           stopScan("timeout");
           setConnectionStatus("error");
@@ -521,7 +520,7 @@ function useBLE(): BluetoothLowEnergyApi {
           }
 
           if (error) {
-            console.log("❌ Scan Error:", error);
+            console.log("[BLE] Scan error:", error);
             setBleError(getBleErrorMessage(error, "Bluetooth scan failed. Check that Bluetooth and location are enabled."));
             stopScan("error");
             setConnectionStatus("error");
@@ -530,7 +529,7 @@ function useBLE(): BluetoothLowEnergyApi {
 
           if (!device) return;
 
-          console.log("✅ Scanned Device:", device.name || "UNNAMED", device.id);
+          console.log("[BLE] Scanned device:", device.name || "UNNAMED", device.id);
           setAllDevices((prevState: Device[]) => {
             if (!isDuplicteDevice(prevState, device)) {
               return [...prevState, device];
@@ -545,7 +544,7 @@ function useBLE(): BluetoothLowEnergyApi {
       };
 
       const state = await bleManager.state();
-      console.log(">>> BLE Manager State:", state);
+      console.log("[BLE] Manager state:", state);
 
       if (state === "PoweredOn") {
         beginScan();
@@ -553,7 +552,7 @@ function useBLE(): BluetoothLowEnergyApi {
       }
 
       const subscription = bleManager.onStateChange((nextState) => {
-        console.log(">>> BLE State Changed:", nextState);
+        console.log("[BLE] State changed:", nextState);
         if (scanSessionIdRef.current !== sessionId) {
           subscription.remove();
           return;
@@ -567,7 +566,7 @@ function useBLE(): BluetoothLowEnergyApi {
       }, true);
       scanStateSubscriptionRef.current = subscription;
     } catch (error) {
-      console.log("❌ Failed to start BLE scan:", error);
+      console.log("[BLE] Failed to start BLE scan:", error);
       setBleError(
         getBleErrorMessage(
           error,
@@ -622,12 +621,11 @@ function useBLE(): BluetoothLowEnergyApi {
     characteristic: Characteristic | null
   ) => {
     if (error) {
-      console.log("❌ BLE Error:", error);
+      console.log("[BLE] Error:", error);
       return;
     }
 
     if (!characteristic?.value) {
-      console.log("⚠️ No data received");
       return;
     }
 
@@ -639,12 +637,10 @@ function useBLE(): BluetoothLowEnergyApi {
       }
 
       if (packet.length < 4) {
-        console.log(`❌ Packet too short: ${packet.length}`);
         return;
       }
 
       if (packet[0] !== PACKET_MAGIC_NUMBER) {
-        console.log("❌ Invalid magic number");
         return;
       }
 
@@ -657,12 +653,10 @@ function useBLE(): BluetoothLowEnergyApi {
             : 0;
 
       if (expectedPacketSize === 0) {
-        console.log(`❌ Unsupported packet version: ${packetVersion}`);
         return;
       }
 
       if (packet.length !== expectedPacketSize) {
-        console.log(`❌ Invalid packet size: ${packet.length} (expected ${expectedPacketSize})`);
         return;
       }
 
@@ -670,7 +664,6 @@ function useBLE(): BluetoothLowEnergyApi {
       const receivedCRC = packet[crcOffset] | (packet[crcOffset + 1] << 8);
       const calculatedCRC = calculateCRC16(packet.slice(0, crcOffset));
       if (receivedCRC !== calculatedCRC) {
-        console.log("❌ CRC mismatch");
         return;
       }
 
@@ -703,10 +696,6 @@ function useBLE(): BluetoothLowEnergyApi {
               pitchAngle: view.getFloat32(18, true),
               feedingPostureDetected: packet[22] === 1,
             };
-
-      if (LOG_BLE_PACKETS) {
-        console.log("✅ Binary data parsed:", parsedData);
-      }
 
       const now = Date.now();
       const packetSignature = JSON.stringify([
@@ -741,10 +730,10 @@ function useBLE(): BluetoothLowEnergyApi {
         timestamp: now,
         ...parsedData,
       }).catch((error) => {
-        console.error("❌ Async sensor logging failed:", error);
+        console.error("[Ingestion] Async sensor logging failed:", error);
       });
     } catch (e) {
-      console.log("❌ Error parsing binary data:", e);
+      console.log("[BLE] Error parsing binary data:", e);
     }
   };
 

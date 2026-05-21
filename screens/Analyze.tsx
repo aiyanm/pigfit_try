@@ -344,7 +344,7 @@ const Analyze = () => {
       setSensorData(rawData);
       setTrendData(aggregatedTrendData);
       setHourlyAnalytics(analytics);
-      console.log(`📊 Loaded ${aggregatedTrendData.length} trend points for ${SUPPORTED_PIG_ID} (${selectedPeriod})`);
+      console.log(`[Analyze] Loaded ${aggregatedTrendData.length} trend points for ${SUPPORTED_PIG_ID} (${selectedPeriod})`);
     } catch (error) {
       console.error('Error loading sensor data:', error);
     } finally {
@@ -818,7 +818,7 @@ const Analyze = () => {
         (progress) => {
           setBackfillProgress(progress);
           console.log(
-            `🗂️ Backfill ${progress.stage} ${progress.current}/${progress.total}: ${progress.label}`
+            `[Analyze] Backfill ${progress.stage} ${progress.current}/${progress.total}: ${progress.label}`
           );
         }
       );
@@ -861,6 +861,11 @@ const Analyze = () => {
         <View className="w-10" />
       </View>
 
+      {!isPigFitConnected ? (
+        <View className="flex-1 items-center justify-center px-6">
+          <Text className="text-center text-base font-semibold text-gray-700">No live device connected.</Text>
+        </View>
+      ) : (
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
         {/* Additional pigs stay hidden until multi-device binding is implemented. */}
         <View className="px-4 py-3">
@@ -1101,6 +1106,7 @@ const Analyze = () => {
         {/* Bottom spacing for additional content */}
         <View className="h-24" />
       </ScrollView>
+      )}
 
     </View>
   );

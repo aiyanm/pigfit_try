@@ -240,7 +240,7 @@ export const finalizeHourlyAggregateBucket = async (pigId: string, bucketStartMs
       high_risk_hour_flag: summary.highRiskHourFlag ? 1 : 0,
     });
   } catch (error) {
-    console.error('❌ Error finalizing hourly analytics bucket:', error);
+    console.error('[Ingestion] Error finalizing hourly analytics bucket:', error);
   }
 };
 
@@ -257,7 +257,7 @@ const queueClosedHourProcessing = (pigId: string, bucketStartMs: number): void =
   closedHourProcessingInFlight.add(key);
   void processClosedHourBucket(pigId, bucketStartMs)
     .catch((error) => {
-      console.error(`❌ Error processing closed hour bucket for ${pigId} @ ${bucketStartMs}:`, error);
+      console.error(`[Ingestion] Error processing closed hour bucket for ${pigId} @ ${bucketStartMs}:`, error);
     })
     .finally(() => {
       closedHourProcessingInFlight.delete(key);
@@ -267,9 +267,9 @@ const queueClosedHourProcessing = (pigId: string, bucketStartMs: number): void =
 export const initializeLogger = async (): Promise<void> => {
   try {
     await dbService.initialize();
-    console.log('✅ Logger initialized - analytics-first storage is ready');
+    console.log('[Ingestion] Logger initialized - analytics-first storage is ready');
   } catch (error) {
-    console.error('❌ Error initializing logger:', error);
+    console.error('[Ingestion] Error initializing logger:', error);
   }
 };
 
@@ -298,7 +298,7 @@ export const logSensorData = async (
     }
 
   } catch (error) {
-    console.error('❌ Error logging sensor data:', error);
+    console.error('[Ingestion] Error logging sensor data:', error);
   }
 };
 
@@ -331,7 +331,7 @@ export const loadSensorData = async (periodHours: number, pigId?: string): Promi
       rawRiskLabel: record.raw_risk_label ?? 'normal',
     }));
   } catch (error) {
-    console.error('❌ Error loading sensor data:', error);
+    console.error('[Ingestion] Error loading sensor data:', error);
     return [];
   }
 };
@@ -340,7 +340,7 @@ export const cleanupOldLogs = async (daysToKeep = 30): Promise<void> => {
   try {
     await dbService.deleteOldData(daysToKeep);
   } catch (error) {
-    console.error('❌ Error cleaning up old data:', error);
+    console.error('[Ingestion] Error cleaning up old data:', error);
   }
 };
 
@@ -360,7 +360,7 @@ export const getDatabaseStats = async () => {
       timestamp: new Date().toLocaleTimeString(),
     };
   } catch (error) {
-    console.error('❌ Error getting DB stats:', error);
+    console.error('[Ingestion] Error getting DB stats:', error);
     return null;
   }
 };
@@ -384,7 +384,7 @@ export const getDeterministicInsights = async (pigId: string, bucketDay?: string
       dailyAssessment: daily,
     };
   } catch (error) {
-    console.error('❌ Error getting deterministic insights:', error);
+    console.error('[Ingestion] Error getting deterministic insights:', error);
     return {
       bucketDay: bucketDay ?? toLocalDateString(Date.now()),
       hourlyInsights: [],
@@ -440,7 +440,7 @@ export const loadTrendData = async (periodType: TrendPeriod, pigId: string): Pro
       thi: row.thi ?? calculateTHI(Number(row.envTemp ?? 0), Number(row.humidity ?? 0)),
     }));
   } catch (error) {
-    console.error('❌ Error loading trend data:', error);
+    console.error('[Ingestion] Error loading trend data:', error);
     return [];
   }
 };
@@ -465,7 +465,7 @@ export const triggerPeriodAggregateRefresh = (
     try {
       await refreshAllPeriodAggregates(pigId);
     } catch (error) {
-      console.error(`❌ Period refresh failed (${source}) for ${pigId}:`, error);
+      console.error(`[Ingestion] Period refresh failed (${source}) for ${pigId}:`, error);
     } finally {
       periodRefreshInFlightByPig.delete(pigId);
     }
@@ -519,7 +519,7 @@ export const computeAndStorePeriodAggregates = async (
       });
     }
   } catch (error) {
-    console.error(`❌ Error computing period aggregates for ${pigId} [${periodType}]:`, error);
+    console.error(`[Ingestion] Error computing period aggregates for ${pigId} [${periodType}]:`, error);
   }
 };
 

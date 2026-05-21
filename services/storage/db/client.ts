@@ -177,7 +177,7 @@ class DatabaseService {
     }
 
     if (hasLegacyHr) {
-      console.log('🔧 Migrating legacy sensor_data schema: removing hr column while preserving rows...');
+      console.log('[DB] Migrating legacy sensor_data schema: removing hr column while preserving rows...');
       try {
         await this.db.execAsync('BEGIN IMMEDIATE TRANSACTION;');
         await this.db.execAsync(`
@@ -228,7 +228,7 @@ class DatabaseService {
         await this.db.execAsync('DROP TABLE sensor_data;');
         await this.db.execAsync('ALTER TABLE sensor_data_new RENAME TO sensor_data;');
         await this.db.execAsync('COMMIT;');
-        console.log('✅ Legacy sensor_data migration complete');
+        console.log('[DB] Legacy sensor_data migration complete');
       } catch (error) {
         await this.db.execAsync('ROLLBACK;');
         throw error;
@@ -239,7 +239,7 @@ class DatabaseService {
     if (!hasActivityState) {
       try {
         await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN activity_state TEXT DEFAULT 'Resting'`);
-        console.log('✅ Added activity_state column to sensor_data');
+        console.log('[DB] Added activity_state column to sensor_data');
       } catch {
         // no-op
       }
@@ -275,7 +275,7 @@ class DatabaseService {
   async initialize(): Promise<void> {
     // If already initialized, return immediately
     if (this.isInitialized) {
-      console.log('📦 Database already initialized');
+      console.log('[DB] Database already initialized');
       return;
     }
 
@@ -291,12 +291,12 @@ class DatabaseService {
     try {
       await this.initPromise;
       this.isInitialized = true;
-      console.log('📦 Database initialized successfully');
+      console.log('[DB] Database initialized successfully');
       
       // Process any queued operations
       await this._processQueue();
     } catch (error) {
-      console.error('❌ Error initializing database:', error);
+      console.error('[DB] Error initializing database:', error);
       this.isInitializing = false;
       this.initPromise = null;
       throw error;
@@ -314,7 +314,7 @@ class DatabaseService {
       await this.db.execAsync('PRAGMA synchronous = NORMAL;');
       await this.createTables();
     } catch (error) {
-      console.error('❌ Error in database initialization:', error);
+      console.error('[DB] Error in database initialization:', error);
       throw error;
     }
   }
@@ -351,7 +351,7 @@ class DatabaseService {
         try {
           await operation();
         } catch (error) {
-          console.error('❌ Error processing queued operation:', error);
+          console.error('[DB] Error processing queued operation:', error);
         }
       }
     }
@@ -605,12 +605,12 @@ class DatabaseService {
       // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we use try/catch
       try {
         await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN dominant_activity_state TEXT DEFAULT 'Resting'`);
-        console.log('✅ Added dominant_activity_state column to hourly_aggregates');
+        console.log('[DB] Added dominant_activity_state column to hourly_aggregates');
       } catch { /* column already exists */ }
 
       try {
         await this.db.execAsync(`ALTER TABLE hourly_aggregates ADD COLUMN sample_count INTEGER DEFAULT 0`);
-        console.log('✅ Added sample_count column to hourly_aggregates');
+        console.log('[DB] Added sample_count column to hourly_aggregates');
       } catch { /* column already exists */ }
 
       try { await this.db.execAsync(`ALTER TABLE sensor_data ADD COLUMN accel_x REAL`); } catch {}
@@ -644,22 +644,22 @@ class DatabaseService {
 
       try {
         await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_case TEXT`);
-        console.log('✅ Added rule_case column to hourly_insights');
+        console.log('[DB] Added rule_case column to hourly_insights');
       } catch { /* column already exists */ }
 
       try {
         await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_severity TEXT`);
-        console.log('✅ Added rule_severity column to hourly_insights');
+        console.log('[DB] Added rule_severity column to hourly_insights');
       } catch { /* column already exists */ }
 
       try {
         await this.db.execAsync(`ALTER TABLE hourly_insights ADD COLUMN rule_reasoning_json TEXT`);
-        console.log('✅ Added rule_reasoning_json column to hourly_insights');
+        console.log('[DB] Added rule_reasoning_json column to hourly_insights');
       } catch { /* column already exists */ }
 
-      console.log('✅ All tables created successfully');
+      console.log('[DB] All tables created successfully');
     } catch (error) {
-      console.error('❌ Error creating tables:', error);
+      console.error('[DB] Error creating tables:', error);
       throw error;
     }
   }
@@ -729,7 +729,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error upserting period aggregate:', error);
+      console.error('[DB] Error upserting period aggregate:', error);
       throw error;
     }
   }
@@ -751,7 +751,7 @@ class DatabaseService {
       );
       return result;
     } catch (error) {
-      console.error('❌ Error getting period aggregates:', error);
+      console.error('[DB] Error getting period aggregates:', error);
       return [];
     }
   }
@@ -799,7 +799,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error inserting sensor data:', error);
+      console.error('[DB] Error inserting sensor data:', error);
       throw error;
     }
   }
@@ -867,7 +867,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error upserting hourly aggregate:', error);
+      console.error('[DB] Error upserting hourly aggregate:', error);
       throw error;
     }
   }
@@ -892,7 +892,7 @@ class DatabaseService {
       const result = await this.db.getAllAsync(query, params);
       return result;
     } catch (error) {
-      console.error('❌ Error getting sensor data:', error);
+      console.error('[DB] Error getting sensor data:', error);
       return [];
     }
   }
@@ -919,7 +919,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error updating sensor feeding fields:', error);
+      console.error('[DB] Error updating sensor feeding fields:', error);
       throw error;
     }
   }
@@ -944,7 +944,7 @@ class DatabaseService {
       const result = await this.db.getAllAsync(query, params);
       return result;
     } catch (error) {
-      console.error('❌ Error getting hourly aggregates:', error);
+      console.error('[DB] Error getting hourly aggregates:', error);
       return [];
     }
   }
@@ -1010,7 +1010,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error upserting hourly insight:', error);
+      console.error('[DB] Error upserting hourly insight:', error);
       throw error;
     }
   }
@@ -1031,7 +1031,7 @@ class DatabaseService {
       );
       return result;
     } catch (error) {
-      console.error('❌ Error getting hourly insights:', error);
+      console.error('[DB] Error getting hourly insights:', error);
       return [];
     }
   }
@@ -1052,7 +1052,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting latest hourly insight:', error);
+      console.error('[DB] Error getting latest hourly insight:', error);
       return null;
     }
   }
@@ -1106,7 +1106,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error upserting daily assessment:', error);
+      console.error('[DB] Error upserting daily assessment:', error);
       throw error;
     }
   }
@@ -1128,7 +1128,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting daily assessment:', error);
+      console.error('[DB] Error getting daily assessment:', error);
       return null;
     }
   }
@@ -1150,7 +1150,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting latest daily assessment:', error);
+      console.error('[DB] Error getting latest daily assessment:', error);
       return null;
     }
   }
@@ -1181,7 +1181,7 @@ class DatabaseService {
         aggregatesCount: aggResult?.count || 0,
       };
     } catch (error) {
-      console.error('❌ Error getting stats:', error);
+      console.error('[DB] Error getting stats:', error);
       return { sensorDataCount: 0, aggregatesCount: 0 };
     }
   }
@@ -1205,10 +1205,10 @@ class DatabaseService {
       );
 
       const totalDeleted = result.changes;
-      console.log(`🗑️ Deleted ${totalDeleted} old records`);
+      console.log(`[DB] Deleted ${totalDeleted} old records`);
       return totalDeleted;
     } catch (error) {
-      console.error('❌ Error deleting old data:', error);
+      console.error('[DB] Error deleting old data:', error);
       return 0;
     }
   }
@@ -1228,7 +1228,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error saving device:', error);
+      console.error('[DB] Error saving device:', error);
       throw error;
     }
   }
@@ -1247,7 +1247,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting device:', error);
+      console.error('[DB] Error getting device:', error);
       return null;
     }
   }
@@ -1266,7 +1266,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error updating device name:', error);
+      console.error('[DB] Error updating device name:', error);
       throw error;
     }
   }
@@ -1284,7 +1284,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting last paired device:', error);
+      console.error('[DB] Error getting last paired device:', error);
       return null;
     }
   }
@@ -1303,7 +1303,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error updating device last_connected:', error);
+      console.error('[DB] Error updating device last_connected:', error);
       throw error;
     }
   }
@@ -1318,7 +1318,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting user profile:', error);
+      console.error('[DB] Error getting user profile:', error);
       return null;
     }
   }
@@ -1341,7 +1341,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error upserting user profile:', error);
+      console.error('[DB] Error upserting user profile:', error);
       throw error;
     }
   }
@@ -1371,7 +1371,7 @@ class DatabaseService {
         );
       });
     } catch (error) {
-      console.error('❌ Error upserting feeding schedule:', error);
+      console.error('[DB] Error upserting feeding schedule:', error);
       throw error;
     }
   }
@@ -1386,7 +1386,7 @@ class DatabaseService {
       );
       return result || null;
     } catch (error) {
-      console.error('❌ Error getting feeding schedule:', error);
+      console.error('[DB] Error getting feeding schedule:', error);
       return null;
     }
   }
@@ -1398,7 +1398,7 @@ class DatabaseService {
     if (this.db) {
       await this.db.closeAsync();
       this.db = null;
-      console.log('🔒 Database closed');
+      console.log('[DB] Database closed');
     }
   }
 }
